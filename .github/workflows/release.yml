@@ -12,6 +12,13 @@ name: Release
 #   存在しない状態になる。そのため「ドラフトに対してビルド → 全アセット添付後に公開」の順にする。
 #   ドラフトは公開までの足場でしかなく、人手で触る必要はない。
 #
+# latest.json の作り方:
+#   updater のマニフェスト latest.json は3プラットフォーム共通の同名アセットなので、
+#   各ビルドジョブに書かせると後勝ちで内容が失われる。そこでビルド側の生成を止め
+#   （uploadUpdaterJson: false）、全ビルド完了後の updater-manifest ジョブで
+#   添付済みの .sig とバンドル名から1回だけ組み立てる。
+#   これによりビルド3種は並列に走らせられる（以前は直列化していた）。
+#
 # 実行の契機:
 #   main へのマージで自動的に走り、そのままリリースまで完了する。
 #   デスクトップアプリの成果物に影響しない変更（Web / ドキュメントのみ）では走らせない。
@@ -64,10 +71,11 @@ jobs:
     needs: draft
     name: Build ${{ matrix.platform }}
     strategy:
+      # 各ジョブはドラフトに自分のバンドルと .sig を足すだけで、同名アセットを
+      # 奪い合わない（latest.json は後段の updater-manifest が作る）。
+      # そのため3プラットフォームを並列に走らせて問題ない。
+      # fail-fast: false は、1つ失敗しても他の成果物を見て原因を切り分けたいため。
       fail-fast: false
-      # latest.json は3プラットフォームが同じリリースの同名アセットを更新するため、
-      # 並列に走らせると片方の書き込みが失われる。順番に実行して取りこぼしを防ぐ。
-      max-parallel: 1
       matrix:
         include:
           - platform: macos-latest
@@ -146,14 +154,37 @@ jobs:
           # 既存のドラフトへアセットを足す。releaseId を渡すと release-drafter が書いた
           # 変更履歴（name / body）を tauri-action が上書きしない。
           releaseId: ${{ needs.draft.outputs.release_id }}
-          # latest.json を生成・添付する（updater のマニフェスト）。既定で true だが明示する。
-          uploadUpdaterJson: true
+          # latest.json はここでは作らない。プラットフォームごとに書くと同名アセットを
+          # 上書きし合うため、全ビルド後の updater-manifest ジョブで1回だけ生成する。
+          uploadUpdaterJson: false
+          # 更新バンドルの .sig は各ジョブが添付する必要がある（既定 true だが明示する）。
+          # updater-manifest はこの .sig を読んで署名を埋め込む。
+          uploadUpdaterSignatures: true
           args: ${{ matrix.args }}
 
-  # 全プラットフォームのアセットが揃ってから公開する。
-  # ここでドラフトを解除するので、リリースが世に出た瞬間には latest.json も揃っている。
-  publish:
+  # 3プラットフォームのアセットが揃ってから、updater のマニフェストを1回だけ組み立てる。
+  # dry_run でもドラフト上で中身を確認したいので、ここは条件を付けない。
+  updater-manifest:
     needs: [draft, build]
+    name: Assemble latest.json
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and attach latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.draft.outputs.release_id }}
+          TAG: ${{ needs.draft.outputs.tag }}
+        # 実行ビットの有無に左右されないよう bash 経由で呼ぶ。
+        run: bash .github/scripts/build-updater-manifest.sh
+
+  # 全アセットと latest.json が揃ってから公開する。
+  # updater-manifest を needs に含めないとマニフェスト添付前に公開されてしまう。
+  publish:
+    needs: [draft, build, updater-manifest]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     steps:

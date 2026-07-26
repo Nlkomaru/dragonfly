@@ -7,7 +7,8 @@
 2. main にマージすると **Release** ワークフローが自動で走り、そのままリリースが公開される。
 3. ワークフロー内で以下が順に走る。
    - `draft` — PR ラベルからバージョンを採番し、ドラフトを用意する（まだ非公開）
-   - `build` — Windows / macOS(aarch64) / Linux のバンドルと `latest.json` をドラフトに添付する
+   - `build` — Windows / macOS(aarch64) / Linux のバンドルと `.sig` をドラフトに添付する（3つ並列）
+   - `updater-manifest` — 添付済みのアセットから `latest.json` を組み立てて1回だけ添付する
    - `publish` — 全アセットが揃ってからドラフトを解除して公開する
 
 ドラフトは公開までの足場でしかなく、人手で触る必要はない。
@@ -44,8 +45,35 @@ CI の "Sync app version from release tag" ステップがタグの値を書き�
 - 権限は `apps/desktop/src-tauri/capabilities/default.json` の `updater:default` /
   `process:allow-restart` で付与している。
 
-`latest.json` は3プラットフォームが同じ名前のアセットを更新するため、
-ビルドジョブは `max-parallel: 1` で直列実行している（並列だと片方の書き込みが失われる）。
+### `latest.json` の作られ方
+
+`latest.json` は3プラットフォーム共通の同名アセットなので、各ビルドジョブに書かせると
+後から終わったジョブの内容だけが残り、他のプラットフォームへの更新が届かなくなる。
+そのためビルド側では生成させず（`tauri-action` の `uploadUpdaterJson: false`）、
+全ビルド完了後の `updater-manifest` ジョブが
+`.github/scripts/build-updater-manifest.sh` で1回だけ組み立てて添付する。
+
+ビルドジョブは同名アセットを奪い合わなくなったので **3つ並列** で走る
+（以前は `max-parallel: 1` で直列実行しており、1リリースに約30分かかっていた）。
+
+スクリプトが `latest.json` の各プラットフォームに割り当てるアセットは次の通り。
+`.sig` の中身が `signature`、`.sig` を外した同名アセットが `url` になる。
+
+| キー | 更新バンドル |
+|---|---|
+| `darwin-aarch64` | `*.app.tar.gz` |
+| `linux-x86_64` | `*.AppImage` |
+| `windows-x86_64` | `*-setup.exe`（NSIS） |
+
+Windows は `bundle.targets: "all"` により `.msi` と `-setup.exe` の両方に `.sig` が出るが、
+更新には Tauri が既定として推奨する NSIS 側を使う（`.msi` は更新時に再起動要求が絡みやすい）。
+
+`url` はドラフトのアセットが返す `browser_download_url` をそのまま使わず、
+`https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>` を自前で組み立てている。
+ドラフト段階の URL は `untagged-<hash>` を含むことがあり、公開後に無効になるため。
+
+いずれかのプラットフォームの `.sig` が欠けている、署名が空、といった場合はジョブを失敗させる。
+欠けた `latest.json` を公開すると更新が静かに止まり、赤いビルドより被害が大きいため。
 
 ## 署名鍵のセットアップ（初回のみ・手元で実行）
 
