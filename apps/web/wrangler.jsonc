@@ -20,7 +20,8 @@
       "bucket_name": "dragonfly-photos"
     }
   ],
-  // 検索用メタデータ。スキーマは apps/web/migrations/ の SQL が正。
+  // 検索用メタデータと better-auth のテーブル。
+  // スキーマの正は apps/web/src/db/schema.ts で、migrations/ の SQL は drizzle-kit の生成物。
   // database_id は `wrangler d1 create dragonfly` で払い出した値に置き換えること。
   "d1_databases": [
     {
@@ -30,6 +31,10 @@
       "migrations_dir": "migrations"
     }
   ],
+  // 認証まわりの設定値 (DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET / BETTER_AUTH_SECRET /
+  // BETTER_AUTH_URL / ALLOWED_DISCORD_USER_IDS) は、web-deploy.yml の Push secrets ステップが
+  // `wrangler secret bulk` で Worker に流し込む。
+  // ここに `vars` として同名のものを書くと二重定義になるので置かないこと。詳細は docs/web-deploy.md。
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1

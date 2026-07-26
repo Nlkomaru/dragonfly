@@ -24,6 +24,24 @@ pub const UPLOAD_PROGRESS_EVENT: &str = "upload_progress";
 /// 1リクエストで問い合わせられるハッシュ数の上限（`packages/core/src/api.ts` と同じ値）。
 const CHECK_HASH_LIMIT: usize = 500;
 
+/// バージョン付き API のプレフィックス。API の版が上がったらここだけを変える。
+const API_V1_PREFIX: &str = "/api/v1";
+
+/// 呼び出し元自身を指すユーザーのエイリアス。
+/// サーバーが API キーからユーザーを解決するため、クライアントは自分の ID を知らなくてよい。
+const CURRENT_USER: &str = "me";
+
+/// バージョン付き API のパスを組み立てる。`suffix` は `/` 始まりで渡す。
+fn v1_path(suffix: &str) -> String {
+    format!("{API_V1_PREFIX}{suffix}")
+}
+
+/// ユーザーに紐づくリソースのパスを組み立てる。
+/// `owner` には `CURRENT_USER` のほか、将来的に具体的なユーザー ID も渡せる。
+fn user_path(owner: &str, suffix: &str) -> String {
+    v1_path(&format!("/users/{owner}{suffix}"))
+}
+
 /// 再試行の最大回数。
 const MAX_ATTEMPTS: u32 = 4;
 /// 再試行の基準待ち時間。試行ごとに倍にする。
@@ -44,7 +62,7 @@ pub struct UploadPhotoMetadata {
     pub tags: Option<Vec<String>>,
 }
 
-/// `/api/photos` のレスポンス。
+/// `/api/v1/users/{owner}/photos` のレスポンス。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadPhotoResponse {
@@ -53,14 +71,14 @@ pub struct UploadPhotoResponse {
     pub deduplicated: bool,
 }
 
-/// `/api/photos/check` のレスポンス。
+/// `/api/v1/users/{owner}/photos/check` のレスポンス。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CheckPhotosResponse {
     uploaded: Vec<String>,
 }
 
-/// `/api/me` のレスポンス。設定画面での接続テストに使う。
+/// `/api/v1/me` のレスポンス。設定画面での接続テストに使う。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MeResponse {
@@ -188,7 +206,7 @@ pub async fn check_uploaded(app: AppHandle, hashes: Vec<String>) -> Result<Vec<S
         let body = serde_json::json!({ "hashes": chunk });
         let response = send_with_retry(|| {
             ctx.client
-                .post(ctx.url("/api/photos/check"))
+                .post(ctx.url(&user_path(CURRENT_USER, "/photos/check")))
                 .bearer_auth(&ctx.api_key)
                 .json(&body)
         })
@@ -206,7 +224,7 @@ pub async fn test_connection(app: AppHandle) -> Result<MeResponse, String> {
     let ctx = ApiContext::build(&app)?;
     let response = ctx
         .client
-        .get(ctx.url("/api/me"))
+        .get(ctx.url(&v1_path("/me")))
         .bearer_auth(&ctx.api_key)
         .send()
         .await
@@ -284,7 +302,7 @@ async fn upload_one(ctx: &ApiContext, path: &Path) -> Result<UploadOutcome, Stri
                     .expect("application/json is a valid MIME type"),
             );
         ctx.client
-            .post(ctx.url("/api/photos"))
+            .post(ctx.url(&user_path(CURRENT_USER, "/photos")))
             .bearer_auth(&ctx.api_key)
             .multipart(form)
     })
@@ -391,5 +409,16 @@ mod tests {
         assert!(is_retryable(Some(reqwest::StatusCode::TOO_MANY_REQUESTS)));
         assert!(is_retryable(None));
         assert!(!is_retryable(Some(reqwest::StatusCode::UNAUTHORIZED)));
+    }
+
+    #[test]
+    fn api_paths_are_versioned_and_user_scoped() {
+        assert_eq!(v1_path("/me"), "/api/v1/me");
+        assert_eq!(
+            user_path(CURRENT_USER, "/photos/check"),
+            "/api/v1/users/me/photos/check"
+        );
+        // owner に具体的なユーザー ID を渡せることの確認。
+        assert_eq!(user_path("u_123", "/photos"), "/api/v1/users/u_123/photos");
     }
 }
