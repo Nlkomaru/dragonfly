@@ -79,5 +79,11 @@ pnpm --dir apps/desktop exec tauri signer generate -w ~/.tauri/dragonfly.key
 |---|---|
 | `TAURI_SIGNING_PRIVATE_KEY` | updater 署名 |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | updater 署名 |
-| `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` | Storybook デプロイ |
+| `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` | Storybook デプロイ、Web アプリのデプロイと D1 マイグレーション |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` / `S3_URL` / `BUCKET_NAME` | PR プレビュー (R2) |
+
+## Web アプリのデプロイ
+
+このドキュメントはデスクトップアプリのリリースだけを扱う。
+Web アプリ (`apps/web`) は別系統で、`web-deploy.yml` と `db-migrate.yml` が担当する。
+手順とリソース (R2 / D1) の準備は [web-deploy.md](./web-deploy.md) を参照。

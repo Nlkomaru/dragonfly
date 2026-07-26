@@ -20,6 +20,40 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 
+# 写真パイプライン用の依存。
+walkdir = "2"            # スクリーンショットの再帰走査
+rayon = "1"              # 走査・ハッシュ・変換の並列化
+sha2 = "0.10"            # 元 PNG の SHA-256
+hex = "0.4"              # ハッシュの16進表現
+chrono = "0.4"           # ファイル名 / mtime のローカル時刻解釈
+flate2 = "1"             # iTXt の zlib 圧縮テキスト展開
+num_cpus = "1"           # 変換の同時実行数
+# PNG のデコードだけできれば良いので機能を絞る。
+image = { version = "0.25", default-features = false, features = ["png"] }
+# AVIF エンコード（純 Rust）。asm 機能はビルドに nasm を要求するため既定では外す。
+# 速度が必要なら nasm を用意したうえで features = ["asm"] を足す。
+ravif = { version = "0.11", default-features = false, features = ["threading"] }
+rgb = "0.8"              # ravif に渡す画素型
+# ハッシュキャッシュ。bundled でシステムの libsqlite3 に依存しない。
+rusqlite = { version = "0.32", features = ["bundled"] }
+# HTTP。既定機能はシステム OpenSSL を引くため rustls に固定する。
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "multipart",
+    "rustls-tls",
+    "stream",
+] }
+keyring = "4"            # API キーを OS のキーチェーンに保存
+tauri-plugin-store = "2"
+tauri-plugin-dialog = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+# macOS のキーチェーンバックエンドはこのターゲットでのみ有効化する。
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "4", features = ["apple-native-keyring-store"] }
+
 # 自動更新はデスクトップ専用プラグイン。モバイルでビルドすると解決に失敗するため
 # ターゲットを限定して依存に入れる。
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]

@@ -1,0 +1,83 @@
+name: Deploy Web
+
+# apps/web (TanStack Start) をビルドして Cloudflare Workers (dragonfly.vrc.nikomaru.dev) に配置する。
+# main に push されたら自動で、任意のタイミングなら workflow_dispatch で手動実行できる。
+# D1 のマイグレーションはここでは適用しない (db-migrate.yml で人手のタイミングを選ぶ)。
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - apps/web/**
+      - packages/core/**
+      - packages/ui/**
+      - packages/api-client/**
+      - pnpm-lock.yaml
+      - .github/workflows/web-deploy.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build:web
+
+      - name: Deploy to Cloudflare
+        # wrangler.jsonc の routes で dragonfly.vrc.nikomaru.dev を custom_domain として指定済み。
+        # 初回実行時に DNS レコードとカスタムドメインが作成される。
+        run: pnpm --dir apps/web exec wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Push secrets
+        # Worker が存在しないと secret を登録できないため、必ず deploy の後に流す。
+        # 値の内容がログに出ないよう、jq で環境変数から JSON を組み立てて標準入力に渡す。
+        # secret を更新すると新しいバージョンが自動で有効になるので、再デプロイは不要。
+        run: |
+          jq -n \
+            --arg discord_client_id "$DISCORD_CLIENT_ID" \
+            --arg discord_client_secret "$DISCORD_CLIENT_SECRET" \
+            --arg better_auth_secret "$BETTER_AUTH_SECRET" \
+            --arg better_auth_url "$BETTER_AUTH_URL" \
+            --arg allowed_discord_user_ids "$ALLOWED_DISCORD_USER_IDS" \
+            '{
+              DISCORD_CLIENT_ID: $discord_client_id,
+              DISCORD_CLIENT_SECRET: $discord_client_secret,
+              BETTER_AUTH_SECRET: $better_auth_secret,
+              BETTER_AUTH_URL: $better_auth_url,
+              ALLOWED_DISCORD_USER_IDS: $allowed_discord_user_ids
+            }' | pnpm --dir apps/web exec wrangler secret bulk
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          DISCORD_CLIENT_SECRET: ${{ secrets.DISCORD_CLIENT_SECRET }}
+          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
+          ALLOWED_DISCORD_USER_IDS: ${{ secrets.ALLOWED_DISCORD_USER_IDS }}

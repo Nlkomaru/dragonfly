@@ -1,16 +1,41 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "dragonfly-web",
-  "main": ".output/server/index.mjs",
+  "main": "dist/server/server.js",
   "compatibility_date": "2025-07-01",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
-    "directory": ".output/public"
+    "directory": "dist/client"
   },
   "routes": [
     {
       "pattern": "dragonfly.vrc.nikomaru.dev",
       "custom_domain": true
     }
-  ]
+  ],
+  // AVIF 本体とサムネイルの保管先。キーは photos/{ownerId}/{sha256}.avif 形式。
+  "r2_buckets": [
+    {
+      "binding": "PHOTOS",
+      "bucket_name": "dragonfly-photos"
+    }
+  ],
+  // 検索用メタデータと better-auth のテーブル。
+  // スキーマの正は apps/web/src/db/schema.ts で、migrations/ の SQL は drizzle-kit の生成物。
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "dragonfly",
+      "database_id": "6d3b4492-c258-4ade-b97d-50d73563ed5a",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // 認証まわりの設定値 (DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET / BETTER_AUTH_SECRET /
+  // BETTER_AUTH_URL / ALLOWED_DISCORD_USER_IDS) は、web-deploy.yml の Push secrets ステップが
+  // `wrangler secret bulk` で Worker に流し込む。
+  // ここに `vars` として同名のものを書くと二重定義になるので置かないこと。詳細は docs/web-deploy.md。
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
 }

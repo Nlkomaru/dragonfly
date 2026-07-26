@@ -3,6 +3,8 @@
  * 画面側は常にこのモジュール経由で呼び出し、環境分岐を書かないこと。
  */
 
+export { assetUrl } from "./asset";
+
 /** Tauri の WebView 上で動いているかを判定する。 */
 export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
