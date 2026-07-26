@@ -8,8 +8,11 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
+    // `?url` 付きインポートなど Vite 固有の型を読む。
+    "types": ["vite/client"],
     "isolatedModules": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src", "vite.config.ts"]
+  // worker-configuration.d.ts は `wrangler types` の生成物。バインディングの型 (Env / D1Database 等) がここに入る。
+  "include": ["src", "vite.config.ts", "worker-configuration.d.ts"]
 }

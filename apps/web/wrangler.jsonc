@@ -1,16 +1,37 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "dragonfly-web",
-  "main": ".output/server/index.mjs",
+  "main": "dist/server/server.js",
   "compatibility_date": "2025-07-01",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
-    "directory": ".output/public"
+    "directory": "dist/client"
   },
   "routes": [
     {
       "pattern": "dragonfly.vrc.nikomaru.dev",
       "custom_domain": true
     }
-  ]
+  ],
+  // AVIF 本体とサムネイルの保管先。キーは photos/{ownerId}/{sha256}.avif 形式。
+  "r2_buckets": [
+    {
+      "binding": "PHOTOS",
+      "bucket_name": "dragonfly-photos"
+    }
+  ],
+  // 検索用メタデータ。スキーマは apps/web/migrations/ の SQL が正。
+  // database_id は `wrangler d1 create dragonfly` で払い出した値に置き換えること。
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "dragonfly",
+      "database_id": "REPLACE_ME",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
 }
