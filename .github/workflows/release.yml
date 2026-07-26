@@ -10,8 +10,23 @@ name: Release
 # 公開のタイミング:
 #   先に公開してからビルドすると、アセットが揃うまでの間 updater が参照する latest.json が
 #   存在しない状態になる。そのため「ドラフトに対してビルド → 全アセット添付後に公開」の順にする。
-#   利用者から見れば手動のドラフト操作は不要で、ボタン1つでリリースが公開される。
+#   ドラフトは公開までの足場でしかなく、人手で触る必要はない。
+#
+# 実行の契機:
+#   main へのマージで自動的に走り、そのままリリースまで完了する。
+#   デスクトップアプリの成果物に影響しない変更（Web / ドキュメントのみ）では走らせない。
+#   リリースに載せたくない PR には `skip-release` ラベルを付ける。
 on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - apps/web/**
+      - docs/**
+      - "**/*.md"
+      - .github/workflows/web-deploy.yml
+      - .github/workflows/db-migrate.yml
+      - .github/workflows/storybook-deploy.yml
   workflow_dispatch:
     inputs:
       dry_run:
