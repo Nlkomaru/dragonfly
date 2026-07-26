@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.output/
+.wrangler/
+storybook-static/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+routeTree.gen.ts
+.env
+.env.local
+.DS_Store

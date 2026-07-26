@@ -1,0 +1,16 @@
+{
+  "name": "@dragonfly/api-client",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@dragonfly/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@tauri-apps/api": "^2.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@tauri-apps/api": { "optional": true }
+  }
+}

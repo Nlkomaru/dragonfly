@@ -1,0 +1,38 @@
+name: Cleanup PR Cache
+
+# GitHub Actions のキャッシュはリポジトリ全体で 10GB という上限があり、
+# 超えると古いエントリから自動で追い出される。
+# PR ブランチ（refs/pull/N/merge）向けのキャッシュは PR が閉じた後は二度と使われないのに
+# 枠を占有し続け、main のビルドキャッシュを押し出してリリースビルドを cold にしていた。
+# そのため PR のクローズ時に、その PR に紐づくキャッシュをまとめて削除する。
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  # キャッシュの削除には actions への書き込み権限が必要。
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete caches for the closed PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          # PR のキャッシュはこの ref スコープに保存される。
+          REF: refs/pull/${{ github.event.pull_request.number }}/merge
+        run: |
+          # gh cache delete は --all と --ref を同時に指定できない（--ref はキー指定用）ため、
+          # ref で絞った一覧から ID を取り出して個別に削除する。
+          # 対象が 0 件でもワークフローを失敗させないよう、ループで回すだけにしておく。
+          ids="$(gh cache list --ref "$REF" --limit 100 --json id --jq '.[].id')"
+          if [ -z "$ids" ]; then
+            echo "no cache found for $REF"
+            exit 0
+          fi
+          for id in $ids; do
+            gh cache delete "$id" && echo "deleted cache $id"
+          done

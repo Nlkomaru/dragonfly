@@ -1,0 +1,27 @@
+name: Release Drafter
+
+# PR が main にマージされるたびに、次のリリースの変更履歴（ドラフト）を更新しておく。
+# このワークフローはリリースを公開しない。公開は release.yml の手動実行で行う。
+# （GITHUB_TOKEN が公開したリリースは release イベントを発火させないため、
+#   公開とビルドは release.yml 内で needs によって直列につないでいる。）
+on:
+  push:
+    branches:
+      - main
+  pull_request_target:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: release-drafter/release-drafter@v6
+        with:
+          config-name: release-drafter.yml
+          publish: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

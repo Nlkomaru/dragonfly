@@ -1,0 +1,83 @@
+# リリース手順
+
+## 全体の流れ
+
+1. PR にラベル（`breaking` / `feature` / `fix` など）を付けて main にマージする。
+   `release-drafter.yml` が次バージョンのドラフトと変更履歴を更新し続ける。
+2. リリースしたくなったら Actions から **Release** ワークフローを `Run workflow` で実行する。
+3. ワークフロー内で以下が順に走る。
+   - `draft` — PR ラベルからバージョンを採番し、ドラフトを用意する（まだ非公開）
+   - `build` — Windows / macOS(aarch64) / Linux のバンドルと `latest.json` をドラフトに添付する
+   - `publish` — 全アセットが揃ってからドラフトを解除して公開する
+
+手動でドラフトを公開する操作は不要。`dry_run` を有効にするとビルドまでで止まり、
+ドラフトのまま結果を確認できる。
+
+## なぜ「公開してからビルド」ではないのか
+
+- GITHUB_TOKEN が公開したリリースは `on: release: [published]` を発火させない。
+  そのため「release-drafter が公開 → 別ワークフローがビルド」という構成は動かない。
+- 先に公開するとアセットが揃うまでの間、updater が参照する `latest.json` が無い状態になる。
+
+この2点を避けるため、採番・ビルド・公開を `release.yml` 1本の `needs` チェーンにまとめている。
+
+## バージョンの正
+
+バージョンの正は **リリースタグ**（release-drafter が採番）。
+`apps/desktop/src-tauri/tauri.conf.json` の `version` はリポジトリ上では更新せず、
+CI の "Sync app version from release tag" ステップがタグの値を書き込む。
+手動で上げると二重管理になるので触らないこと。
+
+## 自動更新（Tauri Updater）
+
+- 設定は `apps/desktop/src-tauri/tauri.conf.json` の `plugins.updater`。
+  - `endpoints`: `https://github.com/Nlkomaru/dragonfly/releases/latest/download/latest.json`
+  - `pubkey`: 署名鍵の公開鍵
+- `bundle.createUpdaterArtifacts: true` により、ビルド時に更新用アーカイブと `.sig` が生成される。
+- アプリ側は `apps/desktop/src/components/UpdateNotifier.tsx` が起動時にチェックし、
+  更新があればダウンロード・インストールして再起動する。
+- 権限は `apps/desktop/src-tauri/capabilities/default.json` の `updater:default` /
+  `process:allow-restart` で付与している。
+
+`latest.json` は3プラットフォームが同じ名前のアセットを更新するため、
+ビルドジョブは `max-parallel: 1` で直列実行している（並列だと片方の書き込みが失われる）。
+
+## 署名鍵のセットアップ（初回のみ・手元で実行）
+
+updater の署名鍵はリポジトリでは生成できないので、手元で作って Secrets に登録する。
+
+```bash
+pnpm --dir apps/desktop exec tauri signer generate -w ~/.tauri/dragonfly.key
+```
+
+- 出力された **公開鍵** を `tauri.conf.json` の `plugins.updater.pubkey` に貼る
+  （初期値は `REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY` というプレースホルダー）。
+- **秘密鍵**（`~/.tauri/dragonfly.key` の中身）とパスワードを GitHub Secrets に登録する。
+
+| Secret | 内容 |
+|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | 秘密鍵ファイルの中身そのもの |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 生成時に設定したパスワード（未設定なら空文字） |
+
+秘密鍵を失うと、既存ユーザーへ更新を配信できなくなる（新しい鍵で署名しても
+インストール済みアプリが検証に失敗する）。バックアップを取っておくこと。
+
+## この構成に含まれない署名
+
+ここで扱っているのは **Tauri updater の署名** のみで、OS のコード署名とは別物。
+未署名のため、Windows では SmartScreen の警告、macOS では Gatekeeper のブロックが出る。
+必要になったら別途以下が要る。
+
+- **Windows**: Authenticode 証明書（`.pfx` または Azure Trusted Signing）と
+  `tauri.conf.json` の `bundle.windows.certificateThumbprint` などの設定
+- **macOS**: Apple Developer Program の Developer ID 証明書と notarization
+  （`APPLE_CERTIFICATE` / `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` などの Secrets）
+
+## 必要な Secrets 一覧
+
+| Secret | 用途 |
+|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | updater 署名 |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | updater 署名 |
+| `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` | Storybook デプロイ |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` / `S3_URL` / `BUCKET_NAME` | PR プレビュー (R2) |

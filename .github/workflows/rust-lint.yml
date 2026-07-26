@@ -1,0 +1,54 @@
+name: Rust Lint
+
+# PRでRustコードの静的解析を行い、mainブランチへのマージ前に問題を検出する。
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# 同じPRで複数回pushされた場合は古い実行をキャンセルしてリソースを節約する。
+concurrency:
+  group: rust-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # release.yml と同じバージョンに揃え、ローカルとCIでツールチェーンを統一する。
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+
+      # Tauri 2 は WebKitGTK などのシステムライブラリに依存するため、
+      # Linux上でビルド・解析するにはネイティブ依存をインストールする必要がある。
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf pkg-config libdbus-1-dev
+
+      # Cargo由来のキャッシュで2回目以降の実行を高速化する。
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Check formatting
+        # rustfmt に従っていないコードがあればエラーで落とす。
+        working-directory: apps/desktop/src-tauri
+        run: cargo fmt --check
+
+      - name: Run clippy
+        # clippyを警告ではなくエラーとして扱い、すべてのターゲットで検査する。
+        # clippy --all-targets はコンパイルチェックも兼ねるため、別途 cargo check は不要。
+        working-directory: apps/desktop/src-tauri
+        run: cargo clippy --all-targets -- -D warnings

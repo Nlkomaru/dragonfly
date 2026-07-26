@@ -1,0 +1,3 @@
+# CI では JUnit XML を吐かせ、GitHub Check としてテスト結果を公開する。
+[profile.ci.junit]
+path = "junit.xml"

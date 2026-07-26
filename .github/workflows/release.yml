@@ -1,0 +1,158 @@
+name: Release
+
+# ドラフトを人手で公開する運用をやめ、このワークフロー1本でリリースを完了させる。
+#
+# なぜ1ワークフローにまとめるのか:
+#   GITHUB_TOKEN が作成・公開したリリースは `on: release: [published]` を発火させない。
+#   そのため「release-drafter が公開 → 別ワークフローがビルド」という構成は静かに動かない。
+#   ここでは採番・ビルド・公開を needs でつないで単一ワークフロー内で完結させる。
+#
+# 公開のタイミング:
+#   先に公開してからビルドすると、アセットが揃うまでの間 updater が参照する latest.json が
+#   存在しない状態になる。そのため「ドラフトに対してビルド → 全アセット添付後に公開」の順にする。
+#   利用者から見れば手動のドラフト操作は不要で、ボタン1つでリリースが公開される。
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "ビルドのみ行い、リリースを公開しない"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # main にマージ済みの PR ラベルからバージョンを採番し、変更履歴を書いたドラフトを用意する。
+  # ここではまだ公開しない（publish: false）。
+  draft:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.drafter.outputs.tag_name }}
+      release_id: ${{ steps.drafter.outputs.id }}
+    steps:
+      - id: drafter
+        uses: release-drafter/release-drafter@v6
+        with:
+          config-name: release-drafter.yml
+          publish: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: draft
+    name: Build ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      # latest.json は3プラットフォームが同じリリースの同名アセットを更新するため、
+      # 並列に走らせると片方の書き込みが失われる。順番に実行して取りこぼしを防ぐ。
+      max-parallel: 1
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+          - platform: ubuntu-22.04
+            args: ""
+          - platform: windows-latest
+            args: ""
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # バージョンの正はリリースタグ（release-drafter が採番）であり、
+      # tauri.conf.json の version はリポジトリ上では更新していない。
+      # 一方 latest.json とバンドルのバージョンは tauri.conf.json から作られるため、
+      # ここでタグの値を書き込んでおかないと、更新が届かない・古い版が配布される。
+      - name: Sync app version from release tag
+        shell: bash
+        env:
+          TAG: ${{ needs.draft.outputs.tag }}
+        run: |
+          version="${TAG#v}"
+          config="apps/desktop/src-tauri/tauri.conf.json"
+          # jq は in-place 編集ができないので一時ファイル経由で書き戻す。
+          jq --arg version "$version" '.version = $version' "$config" > "$config.tmp"
+          mv "$config.tmp" "$config"
+          echo "app version set to $version"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          # macOS は Apple Silicon(aarch64)限定でビルドする。macos-latest のホストは
+          # aarch64 なので追加ターゲットは不要（Intel 対応が要るなら universal に戻す）。
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf pkg-config libdbus-1-dev
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Cargo 由来のキャッシュ。タグ起動のためコンパイル済み依存はヒットしにくいが、
+      # registry のダウンロード短縮と同一タグ再実行・手動再ビルドで効く。
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Build and upload Tauri bundles
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 自動更新パッケージ(.sig)の署名に使う鍵。これが無いと updater 用アセットを
+          # 生成できずビルドが失敗するため、Secrets に必ず登録しておく。
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: apps/desktop
+          # 既存のドラフトへアセットを足す。releaseId を渡すと release-drafter が書いた
+          # 変更履歴（name / body）を tauri-action が上書きしない。
+          releaseId: ${{ needs.draft.outputs.release_id }}
+          # latest.json を生成・添付する（updater のマニフェスト）。既定で true だが明示する。
+          uploadUpdaterJson: true
+          args: ${{ matrix.args }}
+
+  # 全プラットフォームのアセットが揃ってから公開する。
+  # ここでドラフトを解除するので、リリースが世に出た瞬間には latest.json も揃っている。
+  publish:
+    needs: [draft, build]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.draft.outputs.tag }}
+          RELEASE_ID: ${{ needs.draft.outputs.release_id }}
+        run: |
+          # ドラフトの段階では git のタグがまだ存在しないため、`gh release edit <tag>` では
+          # 対象を解決できないことがある。確実な release id を使って API を直接叩く。
+          # make_latest=true で /releases/latest が確実にこのリリースを指すようにする。
+          # updater の endpoint がこのパスを参照しているため、ここを外すと更新が届かない。
+          gh api -X PATCH "repos/${GH_REPO}/releases/${RELEASE_ID}" \
+            -F draft=false -f make_latest=true > /dev/null
+          echo "published $TAG"

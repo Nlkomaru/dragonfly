@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dragonfly-sb",
+  "compatibility_date": "2025-07-01",
+  "assets": {
+    "directory": "./storybook-static"
+  },
+  "routes": [
+    {
+      "pattern": "dragonfly-sb.vrc.nikomaru.dev",
+      "custom_domain": true
+    }
+  ]
+}

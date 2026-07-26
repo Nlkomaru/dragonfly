@@ -1,0 +1,5 @@
+/* 共有 UI のトークン定義（@import "tailwindcss" を含む）を読み込む。 */
+@import "@dragonfly/ui/styles.css";
+
+/* packages/ui のコンポーネントも Tailwind のクラス走査対象に含める。 */
+@source "../../../packages/ui/src";

@@ -1,0 +1,74 @@
+# release-drafter の設定。
+# PR のラベルからセマンティックバージョンを解決し、main へのマージでドラフトの変更履歴を更新する。
+# 実際のリリース（ビルド + 公開）は release.yml を手動実行して行う。
+
+name-template: 'dragonfly $RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+
+# リリース本文のセクション構成。
+# 各 PR に付いたラベルで分類し、未分類は Other にまとめる。
+categories:
+  - title: 'Breaking Changes'
+    labels:
+      - 'breaking'
+      - 'major'
+  - title: 'Features'
+    labels:
+      - 'feature'
+      - 'enhancement'
+      - 'minor'
+  - title: 'Bug Fixes'
+    labels:
+      - 'fix'
+      - 'bugfix'
+      - 'patch'
+  - title: 'Documentation'
+    labels:
+      - 'docs'
+      - 'documentation'
+  - title: 'Internal'
+    labels:
+      - 'chore'
+      - 'refactor'
+      - 'ci'
+  - title: 'Other'
+    labels:
+      - '*'
+
+change-template: '- $TITLE @$AUTHOR (#$NUMBER)'
+change-title-escapes: '\<*_&' # 特殊文字をエスケープしてMarkdownレンダリング崩れを防ぐ
+template: |
+  ## Changes
+
+  $CHANGES
+
+# バージョン解決。PR ラベルで major/minor/patch を決める。
+# ラベル未設定でも安全に進むよう、既定は patch。
+version-resolver:
+  major:
+    labels:
+      - 'breaking'
+      - 'major'
+  minor:
+    labels:
+      - 'feature'
+      - 'enhancement'
+      - 'minor'
+      - 'dependencies'
+  patch:
+    labels:
+      - 'fix'
+      - 'bugfix'
+      - 'patch'
+      - 'docs'
+      - 'documentation'
+      - 'chore'
+      - 'refactor'
+      - 'ci'
+  default: patch
+
+# 特定ラベルの付いた PR をリリース変更履歴から除外する。
+# skip-release : リリースに載せたくないメンテ作業用
+# dependencies は除かず minor 欄に含めるため、exclude には入れない。
+exclude-labels:
+  - 'skip-release'

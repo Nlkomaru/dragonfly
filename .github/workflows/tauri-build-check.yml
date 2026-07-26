@@ -1,0 +1,57 @@
+name: Tauri Build Check
+
+# リリース時にだけビルドが壊れていることに気づく事故を防ぐため、
+# PR の時点で Windows 向けのバンドルが作れるかを確認する。
+# 正式サポートが Windows 11 のみなので、PR では Windows だけを対象にして時間を抑える。
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - apps/desktop/**
+      - packages/**
+      - pnpm-lock.yaml
+      - .github/workflows/tauri-build-check.yml
+  workflow_dispatch:
+
+concurrency:
+  group: tauri-build-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri bundle
+        # --no-bundle でインストーラ生成を省く。createUpdaterArtifacts が有効なため
+        # バンドルまで走らせると署名鍵を要求されるが、PR では鍵を渡さないので回避する。
+        # コンパイルとフロントエンドのビルドが通るかの確認が目的。
+        run: pnpm --dir apps/desktop exec tauri build --no-bundle

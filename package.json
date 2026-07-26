@@ -1,0 +1,14 @@
+{
+  "name": "dragonfly-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.26.1",
+  "scripts": {
+    "dev": "pnpm --dir apps/desktop tauri dev",
+    "dev:web": "pnpm --dir apps/web dev",
+    "build:desktop": "pnpm --dir apps/desktop build",
+    "build:web": "pnpm --dir apps/web build",
+    "storybook": "pnpm --dir packages/ui storybook",
+    "build-storybook": "pnpm --dir packages/ui build-storybook"
+  }
+}

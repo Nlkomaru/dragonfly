@@ -1,0 +1,194 @@
+name: Preview
+
+# PR ごとに Storybook をビルドし、R2 (S3 互換) のコミット単位のパスへ置いて、
+# プレビュー用のリンクを PR にコメントする。
+# あわせて Rust テストを実行し、結果を GitHub Check とコメントのサマリで確認できるようにする。
+on:
+  pull_request:
+    types: [opened, synchronize]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  # Rust テストの JUnit 結果を GitHub Check として公開するために必要。
+  checks: write
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # R2 は S3 互換 API なので aws-cli をそのまま使う。エンドポイントとバケットは secret から取る。
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  # GitHub Actions のランナーで EC2 のメタデータ取得を試みて待たされるのを防ぐ。
+  AWS_EC2_METADATA_DISABLED: true
+  S3_URL: ${{ secrets.S3_URL }}
+  BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
+  # アップロード先バケット(nikomaru-ci)が公開されているドメイン。
+  PREVIEW_BASE_URL: https://ci.nikomaru.dev/dragonfly
+
+jobs:
+  # Rust テストを nextest で実行し、結果を JUnit として GitHub Check に公開しつつ、
+  # 件数（合計/成功/スキップ/失敗）を後続のコメントジョブへ渡す。Storybook ビルドとは独立に並列実行する。
+  rust-test:
+    runs-on: ubuntu-22.04
+    outputs:
+      total: ${{ steps.report.outputs.total }}
+      passed: ${{ steps.report.outputs.passed }}
+      skipped: ${{ steps.report.outputs.skipped }}
+      failed: ${{ steps.report.outputs.failed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # rust-lint.yml / release.yml と同じバージョンに揃え、CI 全体でツールチェーンを統一する。
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      # Tauri 2 は WebKitGTK などのシステムライブラリに依存するため、
+      # Linux 上でビルド・テストするにはネイティブ依存をインストールする必要がある。
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf pkg-config libdbus-1-dev
+
+      # nextest は JUnit XML を標準で出力できるため、結果レポートの生成が簡単になる。
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      # Cargo 由来のキャッシュで2回目以降の実行を高速化する。
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      # ci プロファイル(.config/nextest.toml)で target/nextest/ci/junit.xml を書き出す。
+      # テストが落ちても後続のレポート公開まで進めるよう、ここでは失敗しても続行する。
+      - name: Run tests
+        working-directory: apps/desktop/src-tauri
+        continue-on-error: true
+        run: cargo nextest run --profile ci
+
+      # JUnit 結果を GitHub Check「Rust Test Results」として公開し、件数を outputs に出す。
+      # 失敗テストがあれば fail_on_failure でチェックを赤にし、PR 上で気づけるようにする。
+      - name: Publish test report
+        id: report
+        if: ${{ !cancelled() }}
+        uses: mikepenz/action-junit-report@v6
+        with:
+          report_paths: apps/desktop/src-tauri/target/nextest/ci/junit.xml
+          check_name: Rust Test Results
+          include_passed: true
+          detailed_summary: true
+          fail_on_failure: true
+
+  # Storybook をビルドして R2 へアップロードする。
+  assets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # プレビューの置き場所はコミット単位。PR ではマージコミットではなく、
+      # PR のブランチ先頭のコミットを使う（PR のコミットハッシュと一致させるため）。
+      - name: Set short commit SHA
+        id: vars
+        run: |
+          sha="${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "commit_sha=${sha:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Storybook
+        env:
+          STORYBOOK_BASE_PATH: /dragonfly/${{ steps.vars.outputs.commit_sha }}/storybook/
+        run: pnpm build-storybook
+
+      - name: Upload to R2
+        env:
+          COMMIT_SHORT_SHA: ${{ steps.vars.outputs.commit_sha }}
+        run: |
+          aws configure set default.s3.max_concurrent_requests 50
+
+          S3_BASE="s3://${BUCKET_NAME}/dragonfly/${COMMIT_SHORT_SHA}"
+          S3_OPTS="--endpoint-url ${S3_URL} --only-show-errors --recursive"
+
+          aws s3 cp ./packages/ui/storybook-static "$S3_BASE/storybook" $S3_OPTS
+
+          # 公開ドメインはディレクトリURLから index.html を自動で解決しない。
+          # Storybook はトップページだけ「末尾スラッシュのキー」としても置く
+          # (以降の遷移はクエリ文字列で完結する)。
+          aws s3api put-object \
+            --bucket "${BUCKET_NAME}" \
+            --key "dragonfly/${COMMIT_SHORT_SHA}/storybook/" \
+            --body ./packages/ui/storybook-static/index.html \
+            --content-type "text/html" \
+            --endpoint-url "${S3_URL}" > /dev/null
+
+          echo "R2 upload completed"
+
+  # プレビューのリンクと Rust テストのサマリを1つのコメントにまとめて PR に投稿する。
+  # テストが落ちて rust-test が赤くなってもコメントは出したいので always() で必ず実行する。
+  comment:
+    needs: [rust-test, assets]
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set short commit SHA
+        id: vars
+        run: |
+          sha="${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "commit_sha=${sha:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Comment preview links and test summary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # comment ジョブは checkout しないため .git が無い。gh がリポジトリを
+          # git から推測できず失敗するので、GH_REPO で対象リポジトリを明示する。
+          GH_REPO: ${{ github.repository }}
+          COMMIT_SHORT_SHA: ${{ steps.vars.outputs.commit_sha }}
+          # rust-test の件数。ジョブがスキップ等で値を持たない場合に備えて既定値を入れる。
+          TEST_TOTAL: ${{ needs.rust-test.outputs.total || '—' }}
+          TEST_PASSED: ${{ needs.rust-test.outputs.passed || '0' }}
+          TEST_SKIPPED: ${{ needs.rust-test.outputs.skipped || '0' }}
+          TEST_FAILED: ${{ needs.rust-test.outputs.failed || '0' }}
+        run: |
+          PREVIEW_URL="${PREVIEW_BASE_URL}/${COMMIT_SHORT_SHA}"
+
+          cat << EOF > comment.md
+          ## 🚀 Preview of ${{ github.event.repository.name }}
+
+          コミット \`${COMMIT_SHORT_SHA}\` のプレビューです。
+
+          | Resource | Link |
+          |----------|------|
+          | 📕 Storybook | [Preview](${PREVIEW_URL}/storybook/) |
+
+          ### 🧪 Rust Test Summary
+          詳細は PR のチェック「Rust Test Results」から確認できます。
+
+          | Tests | Passed | Skipped | Failed |
+          |-------|--------|---------|--------|
+          | ${TEST_TOTAL} | ${TEST_PASSED} ✅ | ${TEST_SKIPPED} ⏭️ | ${TEST_FAILED} ❌ |
+          EOF
+
+          # push のたびにコメントが増えないよう、同じコメントを上書きしていく。
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --body-file comment.md --edit-last --create-if-none

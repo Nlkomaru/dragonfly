@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dragonfly-web",
+  "main": ".output/server/index.mjs",
+  "compatibility_date": "2025-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".output/public"
+  },
+  "routes": [
+    {
+      "pattern": "dragonfly.vrc.nikomaru.dev",
+      "custom_domain": true
+    }
+  ]
+}
