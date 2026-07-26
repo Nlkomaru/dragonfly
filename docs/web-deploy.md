@@ -11,16 +11,15 @@
 | R2 バケット | `dragonfly-photos` | AVIF 本体とサムネイル |
 | D1 | `dragonfly` | 写真・ワールド・同席者・タグ・API キー |
 
-R2 バケットは作成済み。D1 は未作成で、`wrangler.jsonc` の `database_id` はプレースホルダのままになっている。
+R2 バケットと D1 はどちらも作成済みで、`wrangler.jsonc` に ID を記載してある。
+
+作り直すときは以下。API トークンには **D1:Edit** の権限が必要で、
+権限が足りないと `Authentication error [code: 10000]` で失敗する。
 
 ```sh
-# D1 を作成し、出力された database_id を apps/web/wrangler.jsonc に書き込む
 pnpm --dir apps/web exec wrangler d1 create dragonfly
+# 出力された database_id を apps/web/wrangler.jsonc に書き込む
 ```
-
-作成に使う API トークンには **D1:Edit** の権限が必要。Storybook デプロイ用のトークンには
-Workers と R2 の権限しか付いていないため、そのままでは `Authentication error [code: 10000]` で失敗する。
-Cloudflare ダッシュボードの API トークン設定で D1 の編集権限を追加してから実行すること。
 
 ## GitHub Actions
 

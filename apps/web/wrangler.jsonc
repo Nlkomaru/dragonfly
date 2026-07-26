@@ -22,12 +22,11 @@
   ],
   // 検索用メタデータと better-auth のテーブル。
   // スキーマの正は apps/web/src/db/schema.ts で、migrations/ の SQL は drizzle-kit の生成物。
-  // database_id は `wrangler d1 create dragonfly` で払い出した値に置き換えること。
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "dragonfly",
-      "database_id": "REPLACE_ME",
+      "database_id": "6d3b4492-c258-4ade-b97d-50d73563ed5a",
       "migrations_dir": "migrations"
     }
   ],
