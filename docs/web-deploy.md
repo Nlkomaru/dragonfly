@@ -33,10 +33,23 @@ Cloudflare ダッシュボードの API トークン設定で D1 の編集権限
 実際に流すときは `dry_run` のチェックを外して実行する。スキーマ変更は破壊的になりうるため、
 デプロイと同じワークフローには載せていない。
 
-必要な Secrets（Storybook デプロイと共用）:
+必要な GitHub Secrets:
 
-- `CLOUDFLARE_API_TOKEN`
-- `CLOUDFLARE_ACCOUNT_ID`
+| Secret | 用途 |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` | デプロイと D1 マイグレーション（Storybook デプロイと共用） |
+| `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | Discord ログイン |
+| `BETTER_AUTH_SECRET` | セッションの暗号化 |
+| `BETTER_AUTH_URL` | 公開 URL |
+| `ALLOWED_DISCORD_USER_IDS` | サインインを許可する Discord ユーザーID（カンマ区切り） |
+
+下 5 つは `web-deploy.yml` の Push secrets ステップが `wrangler secret bulk` で Worker に流し込む。
+Worker が存在しないと登録できないため、必ず `wrangler deploy` の後に実行している。
+secret を更新すると新しいバージョンが自動で有効になるので、再デプロイは要らない。
+手元から入れ直したいときは `pnpm --dir apps/web exec wrangler secret put <NAME>`。
+
+`ALLOWED_DISCORD_USER_IDS` は最初の1人がログインするための逃げ道で、
+通常の許可リストは D1 の `allowed_discord_users` テーブルで管理する。
 
 ## カスタムドメイン
 
