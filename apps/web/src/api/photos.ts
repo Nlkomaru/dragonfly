@@ -21,7 +21,7 @@ import {
   UserPhotoParamSchema,
 } from "./schemas";
 import type { ApiEnv } from "./middleware";
-import { requireAuth, resolveOwner } from "./middleware";
+import { requireAuth, requireAuthOrSignedPhoto, resolveOwner } from "./middleware";
 import {
   deletePhoto,
   findUploadedHashes,
@@ -54,7 +54,60 @@ const notFoundResponse = {
 // basePath は handler.ts 側で与える。ここは :id 以下だけを組み立てる。
 const photosRouter = new Hono<ApiEnv>();
 
-// 認証と所有者解決は配下のすべてに掛ける。個々のルートで書き忘れる余地を無くす。
+// ---------------------------------------------------------------------------
+// 画像配信: 署名 URL またはセッション / API キー。
+// グローバルな requireAuth には載せない（署名だけで <img src> から読めるようにする）。
+// ---------------------------------------------------------------------------
+for (const variant of ["image", "thumb"] as const) {
+  photosRouter.get(
+    `/users/:id/photos/:photoId/${variant}`,
+    describeRoute({
+      tags: ["photos"],
+      summary: variant === "image" ? "画像本体 (AVIF) の配信" : "サムネイル (AVIF) の配信",
+      description:
+        "R2 から直接ストリームする。" +
+        "認可は (1) クエリの HMAC 署名 (exp + sig) か (2) セッション Cookie / API キー。" +
+        "一覧が返す url / thumbUrl は短い有効期限付きの署名 URL なので、" +
+        "ブラウザの <img src> から Authorization 無しで読める。" +
+        "デスクトップは従来どおり Bearer だけでアクセスできる。",
+      responses: {
+        200: {
+          description: "AVIF のバイト列",
+          content: { "image/avif": { schema: { type: "string", format: "binary" } } },
+        },
+        ...notFoundResponse,
+        ...commonErrorResponses,
+      },
+    }),
+    validator("param", UserPhotoParamSchema),
+    requireAuthOrSignedPhoto(variant),
+    async (c) => {
+      const signedExp = c.get("signedPhotoExp");
+      try {
+        return await streamPhotoObject(
+          c.get("db"),
+          c.get("photos"),
+          c.get("ownerId"),
+          c.req.param("photoId"),
+          variant,
+          // 署名経由なら残り寿命で public キャッシュ。資格情報経由は private 長期。
+          signedExp !== undefined
+            ? { mode: "signed", exp: signedExp }
+            : { mode: "private" },
+        );
+      } catch (error) {
+        if (error instanceof PhotoObjectNotFound) {
+          throw new HTTPException(404, { message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 一覧・詳細・アップロード・削除: 認証必須（署名では開けない）。
+// ---------------------------------------------------------------------------
 photosRouter.use("/users/:id/*", requireAuth, resolveOwner);
 
 photosRouter.get(
@@ -63,7 +116,8 @@ photosRouter.get(
     tags: ["photos"],
     summary: "写真の一覧",
     description:
-      "撮影日時の新しい順に返す。並びは (takenAt DESC, id DESC) で、同時刻でも順序が決まる。",
+      "撮影日時の新しい順に返す。並びは (takenAt DESC, id DESC) で、同時刻でも順序が決まる。" +
+      "各写真の url / thumbUrl は HMAC 署名付きの短い有効期限 URL。",
     responses: {
       200: {
         description: "写真の一覧と次ページのカーソル",
@@ -76,14 +130,19 @@ photosRouter.get(
   validator("query", ListPhotosQuerySchema),
   async (c) => {
     const query = c.req.valid("query");
-    const result = await listPhotos(c.get("db"), c.get("ownerId"), {
-      worldId: query.world,
-      playerId: query.player,
-      tag: query.tag,
-      from: query.from,
-      to: query.to,
-      cursor: query.cursor,
-    });
+    const result = await listPhotos(
+      c.get("db"),
+      c.get("ownerId"),
+      {
+        worldId: query.world,
+        playerId: query.player,
+        tag: query.tag,
+        from: query.from,
+        to: query.to,
+        cursor: query.cursor,
+      },
+      c.env.BETTER_AUTH_SECRET,
+    );
     return c.json(result);
   },
 );
@@ -221,7 +280,12 @@ photosRouter.get(
   validator("param", UserPhotoParamSchema),
   async (c) => {
     // 所有者条件込みで引くので、他人の写真 ID を指定しても 404 になる。
-    const photo = await getPhoto(c.get("db"), c.get("ownerId"), c.req.param("photoId"));
+    const photo = await getPhoto(
+      c.get("db"),
+      c.get("ownerId"),
+      c.req.param("photoId"),
+      c.env.BETTER_AUTH_SECRET,
+    );
     if (!photo) throw new HTTPException(404, { message: "photo not found" });
     return c.json(photo);
   },
@@ -250,45 +314,5 @@ photosRouter.delete(
     return c.body(null, 204);
   },
 );
-
-// 画像本体とサムネイルは処理が同じなので、variant だけ変えて同じ形で 2 本生やす。
-for (const variant of ["image", "thumb"] as const) {
-  photosRouter.get(
-    `/users/:id/photos/:photoId/${variant}`,
-    describeRoute({
-      tags: ["photos"],
-      summary: variant === "image" ? "画像本体 (AVIF) の配信" : "サムネイル (AVIF) の配信",
-      description:
-        "R2 から直接ストリームする。所有者を確認してから流すので、" +
-        "認証（セッション Cookie か API キー）が必須。" +
-        "そのためブラウザの <img src> からは読み込めない（issue #10）。",
-      responses: {
-        200: {
-          description: "AVIF のバイト列",
-          content: { "image/avif": { schema: { type: "string", format: "binary" } } },
-        },
-        ...notFoundResponse,
-        ...commonErrorResponses,
-      },
-    }),
-    validator("param", UserPhotoParamSchema),
-    async (c) => {
-      try {
-        return await streamPhotoObject(
-          c.get("db"),
-          c.get("photos"),
-          c.get("ownerId"),
-          c.req.param("photoId"),
-          variant,
-        );
-      } catch (error) {
-        if (error instanceof PhotoObjectNotFound) {
-          throw new HTTPException(404, { message: error.message });
-        }
-        throw error;
-      }
-    },
-  );
-}
 
 export default photosRouter;

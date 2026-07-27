@@ -59,6 +59,13 @@ export function PhotoDetailDialog({
   tags = [],
   className,
 }: PhotoDetailDialogProps) {
+  // ワールド名が空文字の写真でもタイトルが空にならないようにする。
+  const worldName = photo?.metadata.world.name || "不明なワールド";
+  const worldId = photo?.metadata.world.id ?? "";
+  const instanceId = photo?.metadata.world.instanceId ?? "";
+  const worldRefLabel =
+    worldId || instanceId ? `${worldId}${worldId && instanceId ? ":" : ""}${instanceId}` : "記録なし";
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={cn("max-w-3xl gap-0 p-0 sm:max-w-3xl", className)}>
@@ -68,7 +75,7 @@ export function PhotoDetailDialog({
               {imageSrc ? (
                 <img
                   src={imageSrc}
-                  alt={photo.metadata.world.name}
+                  alt={worldName}
                   className="max-h-[60vh] w-full object-contain"
                 />
               ) : (
@@ -78,7 +85,7 @@ export function PhotoDetailDialog({
 
             <div className="flex flex-col gap-4 p-6">
               <div className="pr-8">
-                <DialogTitle className="truncate">{photo.metadata.world.name}</DialogTitle>
+                <DialogTitle className="truncate">{worldName}</DialogTitle>
                 <DialogDescription className="truncate">{photo.fileName}</DialogDescription>
               </div>
 
@@ -92,10 +99,10 @@ export function PhotoDetailDialog({
               </DetailRow>
 
               <DetailRow icon={<Globe />} label="ワールド">
-                <p>{photo.metadata.world.name}</p>
+                <p>{worldName}</p>
                 {/* インスタンス ID は長いので折り返さず横スクロールさせる。 */}
                 <p className="overflow-x-auto text-xs whitespace-nowrap text-muted-foreground">
-                  {photo.metadata.world.id}:{photo.metadata.world.instanceId}
+                  {worldRefLabel}
                 </p>
               </DetailRow>
 

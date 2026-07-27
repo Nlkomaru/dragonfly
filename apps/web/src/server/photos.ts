@@ -9,6 +9,7 @@ import type { BatchItem } from "drizzle-orm/batch";
 import type { DrizzleDb } from "../db/client";
 import { photoPlayers, photoTags, photos, tags, vrcUsers, worlds } from "../db/schema";
 import { uuidv7 } from "./ids";
+import { buildSignedPhotoUrl, photoUrlExpiry } from "./signedUrl";
 
 /** 一覧の 1 ページあたりの件数。 */
 const PAGE_SIZE = 60;
@@ -54,22 +55,27 @@ interface PhotoRow {
  * エイリアスのまま返すと、URL を別の文脈（キャッシュや共有）に持ち出したときに
  * 誰の写真か分からなくなるため。
  *
- * NOTE (issue #10): この URL は Authorization ヘッダ必須の API を指しているので、
- * ブラウザの <img src> からは読み込めない（ブラウザは Authorization を付けない）。
- * 署名付き URL か Cookie 許可のどちらかを入れるまで、ギャラリー UI は画像を表示できない。
+ * 画像パスには HMAC 署名と短い有効期限を付ける。ブラウザの <img src> は
+ * Authorization を送れないので、クエリの署名だけで配信を許可する（issue #10）。
  */
-function toApiPhoto(
+async function toApiPhoto(
   ownerId: string,
   row: PhotoRow,
   players: ApiPhoto["players"],
   tagNames: string[],
-): ApiPhoto {
-  const base = `/api/v1/users/${ownerId}/photos/${row.id}`;
+  signingSecret: string,
+): Promise<ApiPhoto> {
+  // 本体とサムネは同じ exp にして、一覧の有効期限を揃える。
+  const exp = photoUrlExpiry();
+  const [url, thumbUrl] = await Promise.all([
+    buildSignedPhotoUrl(signingSecret, ownerId, row.id, "image", exp),
+    buildSignedPhotoUrl(signingSecret, ownerId, row.id, "thumb", exp),
+  ]);
   return {
     id: row.id,
     sourceSha256: row.sourceSha256,
-    url: `${base}/image`,
-    thumbUrl: `${base}/thumb`,
+    url,
+    thumbUrl,
     takenAt: row.takenAt,
     width: row.width,
     height: row.height,
@@ -241,6 +247,7 @@ export async function listPhotos(
   db: DrizzleDb,
   ownerId: string,
   filters: ListPhotosFilters,
+  signingSecret: string,
 ): Promise<ListPhotosResponse> {
   const conditions = [eq(photos.ownerId, ownerId)];
 
@@ -283,12 +290,15 @@ export async function listPhotos(
   const relations = await loadRelations(db, ownerId, rows.map((row) => row.id));
   const last = rows[rows.length - 1];
   return {
-    photos: rows.map((row) =>
-      toApiPhoto(
-        ownerId,
-        row,
-        relations.players.get(row.id) ?? [],
-        relations.tags.get(row.id) ?? [],
+    photos: await Promise.all(
+      rows.map((row) =>
+        toApiPhoto(
+          ownerId,
+          row,
+          relations.players.get(row.id) ?? [],
+          relations.tags.get(row.id) ?? [],
+          signingSecret,
+        ),
       ),
     ),
     nextCursor: hasMore && last ? encodeCursor(last.takenAt, last.id) : null,
@@ -339,6 +349,7 @@ export async function getPhoto(
   db: DrizzleDb,
   ownerId: string,
   photoId: string,
+  signingSecret: string,
 ): Promise<ApiPhoto | null> {
   const rows = await db
     .select(photoColumns)
@@ -353,6 +364,7 @@ export async function getPhoto(
     row,
     relations.players.get(row.id) ?? [],
     relations.tags.get(row.id) ?? [],
+    signingSecret,
   );
 }
 

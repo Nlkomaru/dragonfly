@@ -12,13 +12,20 @@ export interface PhotoCardProps {
    * 未生成のうちは undefined を渡すとスケルトンを出す。
    */
   thumbnailSrc?: string;
-  selected: boolean;
+  /** 選択中かどうか。閲覧専用 (selectable=false) では無視される。 */
+  selected?: boolean;
   /**
    * 選択状態のトグル要求。shift 押下を第2引数で伝え、範囲選択の判断は呼び出し側に委ねる。
+   * selectable=false のときは呼ばれない。
    */
-  onToggle: (photo: Photo, shiftKey: boolean) => void;
-  /** 詳細ダイアログを開くなど、カード本体のクリックとは別の操作。 */
+  onToggle?: (photo: Photo, shiftKey: boolean) => void;
+  /** 詳細ダイアログを開くなど。selectable=false ではカード本体のクリックで呼ばれる。 */
   onOpen?: (photo: Photo) => void;
+  /**
+   * 選択 UI を出すか。既定は true（デスクトップ互換）。
+   * false にするとチェックボックスと送信済みバッジを隠し、クリックで onOpen する。
+   */
+  selectable?: boolean;
   className?: string;
 }
 
@@ -30,34 +37,48 @@ export interface PhotoCardProps {
 export function PhotoCard({
   photo,
   thumbnailSrc,
-  selected,
+  selected = false,
   onToggle,
   onOpen,
+  selectable = true,
   className,
 }: PhotoCardProps) {
-  // カード全体のクリックで選択をトグルする。shift 併用で範囲選択になる。
+  // ワールド名が空でも aria-label / オーバーレイが破綻しないようにする。
+  const worldName = photo.metadata.world.name || "不明なワールド";
+
+  // 選択モードならトグル、閲覧モードなら詳細を開く。
+  const handleActivate = (shiftKey: boolean) => {
+    if (selectable) {
+      onToggle?.(photo, shiftKey);
+      return;
+    }
+    onOpen?.(photo);
+  };
+
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
-    onToggle(photo, event.shiftKey);
+    handleActivate(event.shiftKey);
   };
 
   return (
     <div
-      role="checkbox"
-      aria-checked={selected}
-      aria-label={photo.metadata.world.name}
+      role={selectable ? "checkbox" : "button"}
+      aria-checked={selectable ? selected : undefined}
+      aria-label={worldName}
       tabIndex={0}
       onClick={handleClick}
       onKeyDown={(event) => {
-        // キーボード操作でも選択できるようにする。
+        // キーボード操作でも選択 / 詳細を開けるようにする。
         if (event.key === " " || event.key === "Enter") {
           event.preventDefault();
-          onToggle(photo, event.shiftKey);
+          handleActivate(event.shiftKey);
         }
       }}
       className={cn(
         "group relative aspect-square cursor-pointer overflow-hidden rounded-lg border bg-muted transition-all outline-none",
         "focus-visible:ring-ring/50 focus-visible:ring-[3px]",
-        selected ? "border-primary ring-2 ring-primary" : "border-border hover:border-ring",
+        selectable && selected
+          ? "border-primary ring-2 ring-primary"
+          : "border-border hover:border-ring",
         className,
       )}
     >
@@ -77,23 +98,25 @@ export function PhotoCard({
         </div>
       )}
 
-      {/* 選択チェックボックス。常時表示せず、選択中かホバー時のみ出す。 */}
-      <div
-        className={cn(
-          "absolute top-2 left-2 transition-opacity",
-          selected ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus:opacity-100",
-        )}
-      >
-        <Checkbox
-          checked={selected}
-          tabIndex={-1}
-          aria-hidden
-          className="size-5 border-white/70 bg-black/40 shadow-sm"
-        />
-      </div>
+      {/* 選択チェックボックス。閲覧モードでは出さない。常時表示せず、選択中かホバー時のみ出す。 */}
+      {selectable ? (
+        <div
+          className={cn(
+            "absolute top-2 left-2 transition-opacity",
+            selected ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus:opacity-100",
+          )}
+        >
+          <Checkbox
+            checked={selected}
+            tabIndex={-1}
+            aria-hidden
+            className="size-5 border-white/70 bg-black/40 shadow-sm"
+          />
+        </div>
+      ) : null}
 
-      {/* 送信済みバッジ。既に送った写真を再送しないための目印。 */}
-      {photo.uploaded ? (
+      {/* 送信済みバッジ。選択 UI があるときだけ出す（Web 閲覧では不要なノイズになる）。 */}
+      {selectable && photo.uploaded ? (
         <span
           title="送信済み"
           className="absolute top-2 right-2 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm"
@@ -110,11 +133,12 @@ export function PhotoCard({
           "opacity-0 transition-opacity group-hover:opacity-100 group-focus:opacity-100",
         )}
       >
-        <p className="truncate text-xs font-medium text-white">{photo.metadata.world.name}</p>
+        <p className="truncate text-xs font-medium text-white">{worldName}</p>
       </div>
 
-      {/* 詳細を開く操作は選択と衝突するため、別のクリック領域に分ける。 */}
-      {onOpen ? (
+      {/* 詳細を開く操作は選択と衝突するため、選択モードでのみ別クリック領域に分ける。
+          閲覧モードではカード全体が onOpen になるのでボタンは不要。 */}
+      {selectable && onOpen ? (
         <button
           type="button"
           onClick={(event) => {

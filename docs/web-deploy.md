@@ -158,9 +158,15 @@ Hono が `/api` 配下をすべて持ち、OpenAPI の仕様と閲覧 UI も同�
 `/api/*` は TanStack Start のキャッチオールルート `apps/web/src/routes/api/$.ts` が
 まるごと Hono に委譲している。API のルート定義は `apps/web/src/api/` 側だけを見ればよい。
 
-### 未解決: 画像 URL がブラウザから読めない (issue #10)
+### 画像 URL は HMAC 署名付き (issue #10)
 
-`/image` と `/thumb` は所有者を確認してから R2 を流すため、認証が必須になっている。
-ブラウザは `<img src>` に Authorization ヘッダを付けないので、この URL をそのまま
-img に指しても表示できない。ギャラリー UI を作る前に、署名付き URL か
-Cookie 認証の許可のどちらかを決める必要がある。
+`/image` と `/thumb` は、次のどちらかで認可する。
+
+- **署名付き URL**: クエリ `exp`（unix seconds）と `sig`（HMAC-SHA256 の base64url）。
+  署名対象は `v1:{ownerId}:{photoId}:{variant}:{exp}`。鍵は `BETTER_AUTH_SECRET` を流用する。
+  一覧 / 詳細が返す `url` / `thumbUrl` がこの形なので、ブラウザの `<img src>` から
+  Authorization 無しで表示できる。既定 TTL は 6 時間。
+- **セッション Cookie / API キー**: デスクトップ向けの従来パス。署名は不要。
+
+署名経由の応答は `Cache-Control: public, max-age=<残秒>, immutable`、
+資格情報経由は `private, max-age=31536000, immutable`。

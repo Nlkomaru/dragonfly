@@ -102,10 +102,13 @@ export const UploadPhotoResponseSchema = z.object({
 export const ApiPhotoSchema = z.object({
   id: z.string(),
   sourceSha256: z.string(),
-  // NOTE (issue #10): この URL は Authorization ヘッダを必要とする API を指す。
-  // ブラウザの <img src> は Authorization を付けないため、そのままでは読み込めない。
-  url: z.string().meta({ description: "画像本体の API パス（認証が必要）" }),
-  thumbUrl: z.string().meta({ description: "サムネイルの API パス（認証が必要）" }),
+  // 短い有効期限の HMAC 署名付き相対パス。ブラウザの <img src> からそのまま読める。
+  url: z
+    .string()
+    .meta({ description: "画像本体の署名付き API パス（短命の exp/sig 付き）" }),
+  thumbUrl: z
+    .string()
+    .meta({ description: "サムネイルの署名付き API パス（短命の exp/sig 付き）" }),
   takenAt: z.number(),
   width: z.number(),
   height: z.number(),

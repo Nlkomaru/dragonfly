@@ -92,7 +92,7 @@ function KeysPage() {
   }
 
   return (
-    <main className="mx-auto flex max-w-3xl flex-col gap-6 p-8">
+    <main className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col gap-6 overflow-y-auto p-8">
       <header className="flex flex-col gap-1">
         <h1 className="text-2xl font-bold">API キー</h1>
         <p className="text-sm text-muted-foreground">
