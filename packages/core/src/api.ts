@@ -39,7 +39,9 @@ export interface UploadPhotoResponse {
 export interface ApiPhoto {
   id: string;
   sourceSha256: string;
+  /** 画像本体の API パス。Web では短命の HMAC 署名付き相対 URL。 */
   url: string;
+  /** サムネイルの API パス。Web では短命の HMAC 署名付き相対 URL。 */
   thumbUrl: string;
   takenAt: number;
   width: number;
