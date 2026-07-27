@@ -21,8 +21,8 @@ export interface PhotoLightboxProps {
 /**
  * 写真を前面いっぱいに出すだけのビューア。
  * 情報は ⓘ の詳細ダイアログ側に置き、ここでは画像を見ることだけに集中させる。
- * 背景をクリックすると閉じるが、画像そのもののクリックでは閉じない
- * （拡大して眺めている最中に誤って閉じるのを防ぐため）。
+ * 画像を含め、どこを押しても閉じる。前後の移動と閉じるボタンだけは
+ * クリックを伝播させず、押した通りに動くようにしている。
  */
 export function PhotoLightbox({
   photo,
@@ -72,8 +72,7 @@ export function PhotoLightbox({
             src={imageSrc}
             alt={worldName}
             decoding="async"
-            // 画像のクリックは閉じる操作に伝えない。背景のクリックだけで閉じる。
-            onClick={(event) => event.stopPropagation()}
+            // 画像も含め、どこを押しても閉じる（DialogContent 側の onClick に任せる）。
             onLoad={() => setLoaded(true)}
             className={cn(
               "max-h-dvh max-w-full object-contain transition-opacity duration-200",
@@ -101,7 +100,10 @@ export function PhotoLightbox({
         <button
           type="button"
           aria-label="閉じる"
-          onClick={() => onOpenChange(false)}
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenChange(false);
+          }}
           className="absolute top-4 right-4 rounded-full p-2 text-white/80 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
         >
           <X className="size-5" aria-hidden />
@@ -133,7 +135,7 @@ function NavButton({
       type="button"
       aria-label={label}
       onClick={(event) => {
-        // 背景クリック扱いで閉じないようにする。
+        // 前後の移動が「閉じる」に飲まれないようにする。
         event.stopPropagation();
         onClick();
       }}

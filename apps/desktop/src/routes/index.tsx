@@ -143,14 +143,14 @@ function Index() {
         )}
       </main>
 
-      {/* 詳細。タグはサーバー側のものなので、ローカルでは編集させない。 */}
+      {/* 詳細。情報だけを出す（画像は拡大表示の役目）。
+          タグはサーバー側のものなので、ローカルでは編集させない。 */}
       <PhotoDetailDialog
         photo={detailPhoto}
         open={detailPhoto !== null}
         onOpenChange={(open) => {
           if (!open) setDetailPhoto(null);
         }}
-        imageSrc={detailPhoto ? thumbnailSrcFor(detailPhoto.path) : undefined}
         onPreview={detailPhoto ? () => setPreviewPhoto(detailPhoto) : undefined}
       />
 

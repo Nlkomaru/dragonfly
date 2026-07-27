@@ -17,8 +17,23 @@ export {
   DialogTitle,
   DialogTrigger,
 } from "./components/ui/dialog";
+export {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+} from "./components/ui/command";
 export { Input } from "./components/ui/input";
 export { Label } from "./components/ui/label";
+export {
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+  PopoverTrigger,
+} from "./components/ui/popover";
 export { ScrollArea, ScrollBar } from "./components/ui/scroll-area";
 export { Separator } from "./components/ui/separator";
 export { Toaster, toast } from "./components/ui/sonner";

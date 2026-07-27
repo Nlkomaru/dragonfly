@@ -524,7 +524,6 @@ function GalleryPage() {
         photo={detailPhoto}
         open={Boolean(search.photo)}
         onOpenChange={closeDetail}
-        imageSrc={search.photo ? urlById.get(search.photo) : undefined}
         tags={pendingTags ?? (search.photo ? (tagsById.get(search.photo) ?? []) : [])}
         tagSuggestions={tagSuggestions}
         tagsPending={savingTagsFor !== null && savingTagsFor === search.photo}

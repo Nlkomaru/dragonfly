@@ -5,6 +5,7 @@ import { Clock, Globe, Maximize2, Tag, Users } from "lucide-react";
 import { cn } from "../lib/utils";
 import { TagEditor } from "./TagEditor";
 import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 import { Separator } from "./ui/separator";
 
@@ -13,8 +14,6 @@ export interface PhotoDetailDialogProps {
   photo: Photo | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** 原寸画像の URL。未取得なら undefined。 */
-  imageSrc?: string;
   /** Web ギャラリーで付けたタグ。ローカル側では空配列でよい。 */
   tags?: string[];
   /**
@@ -60,14 +59,14 @@ function DetailRow({
 }
 
 /**
- * 写真の詳細ダイアログ。主に Web ギャラリーから使い、
- * 画像・撮影日時・ワールド・同席者・タグをまとめて見せる。
+ * 写真の情報だけを見せるダイアログ。
+ * 画像は拡大表示（PhotoLightbox）の役目なので、ここでは持たない。
+ * 撮影日時・ワールド・同席者・タグを、上から順に一覧できる形に並べる。
  */
 export function PhotoDetailDialog({
   photo,
   open,
   onOpenChange,
-  imageSrc,
   tags = [],
   onTagsChange,
   tagSuggestions = [],
@@ -84,43 +83,22 @@ export function PhotoDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={cn("max-w-3xl gap-0 p-0 sm:max-w-3xl", className)}>
+      <DialogContent className={cn("max-w-lg gap-0 sm:max-w-lg", className)}>
         {photo ? (
           <>
-            <div className="relative flex items-center justify-center bg-black">
-              {imageSrc ? (
-                <img
-                  src={imageSrc}
-                  alt={worldName}
-                  // 拡大できるときは、画像そのものを押しても前面表示に入れる。
-                  onClick={onPreview}
-                  className={cn(
-                    "max-h-[60vh] w-full object-contain",
-                    onPreview && "cursor-zoom-in",
-                  )}
-                />
-              ) : (
-                <div className="flex h-64 w-full animate-pulse items-center justify-center bg-muted" />
-              )}
-
-              {/* 画像クリックだけだと拡大できると分からないので、ボタンも添える。 */}
-              {onPreview ? (
-                <button
-                  type="button"
-                  aria-label="拡大表示"
-                  title="拡大表示"
-                  onClick={onPreview}
-                  className="absolute right-2 bottom-2 rounded-full bg-black/55 p-2 text-white/90 backdrop-blur-sm hover:bg-black/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-                >
-                  <Maximize2 className="size-4" aria-hidden />
-                </button>
-              ) : null}
-            </div>
-
-            <div className="flex flex-col gap-4 p-6">
-              <div className="pr-8">
-                <DialogTitle className="truncate">{worldName}</DialogTitle>
-                <DialogDescription className="truncate">{photo.fileName}</DialogDescription>
+            <div className="flex flex-col gap-4">
+              <div className="flex items-start gap-2 pr-8">
+                <div className="min-w-0 flex-1">
+                  <DialogTitle className="truncate">{worldName}</DialogTitle>
+                  <DialogDescription className="truncate">{photo.fileName}</DialogDescription>
+                </div>
+                {/* 情報から画像を見に行く導線。画像自体はここには置かない。 */}
+                {onPreview ? (
+                  <Button type="button" variant="outline" size="sm" onClick={onPreview}>
+                    <Maximize2 aria-hidden />
+                    拡大
+                  </Button>
+                ) : null}
               </div>
 
               <Separator />
