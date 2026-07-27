@@ -18,7 +18,14 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$PICTURE/VRChat/**",
+          "$PICTURE/VRChat/**/*"
+        ]
+      }
     }
   },
   "bundle": {

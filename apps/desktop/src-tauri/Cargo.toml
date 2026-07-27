@@ -14,7 +14,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# protocol-asset: ローカル画像を asset プロトコル（http://asset.localhost/...）で
+# WebView に読ませるために必要。無いとハンドラ自体がコンパイルされない。
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
