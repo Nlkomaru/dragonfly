@@ -40,11 +40,6 @@ export function usePhotoLibrary() {
     }
   }, [setPhotos, setScanning, setSkipped]);
 
-  /** 起動時に一度だけ走査する。 */
-  useEffect(() => {
-    void scan();
-  }, [scan]);
-
   /** 選択中の写真を AVIF に変換して送る。送信済みのものは Rust 側で除外される。 */
   const upload = useCallback(async () => {
     const paths = [...selectedPaths];
@@ -55,6 +50,22 @@ export function usePhotoLibrary() {
   }, [selectedPaths, clearSelection, scan]);
 
   return { photos, scanning, scan, upload };
+}
+
+/**
+ * 起動時に一度だけ走査する。root と各画面の両方から呼ばれても二重に走らないよう、
+ * モジュールスコープのフラグで守る（画面の再マウントでも再走査しない）。
+ */
+let hasScannedOnce = false;
+
+export function useInitialPhotoScan(): void {
+  const { scan } = usePhotoLibrary();
+
+  useEffect(() => {
+    if (hasScannedOnce) return;
+    hasScannedOnce = true;
+    void scan();
+  }, [scan]);
 }
 
 /** ハッシュを計算し、サーバーに送信済みかを問い合わせて一覧に反映する。 */
