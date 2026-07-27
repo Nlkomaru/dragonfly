@@ -28,6 +28,12 @@ export interface PhotoGridProps {
   onRangeSelect?: (fromIndex: number, toIndex: number) => void;
   /** 写真ごとのサムネイル URL を返す。未生成なら undefined。 */
   thumbnailSrcFor?: (photo: Photo) => string | undefined;
+  /**
+   * 実際に描画している写真が変わったときに呼ぶ。
+   * サムネイルの生成を「今見えている分」だけに絞るために使う
+   * （全件を先に作っても待ち時間が前倒しになるだけなので）。
+   */
+  onVisiblePhotosChange?: (photos: Photo[]) => void;
   onOpen?: (photo: Photo) => void;
   /**
    * 選択 UI を出すか。既定 true（デスクトップ互換）。
@@ -53,6 +59,7 @@ export function PhotoGrid({
   onToggle,
   onRangeSelect,
   thumbnailSrcFor,
+  onVisiblePhotosChange,
   onOpen,
   selectable = true,
   onNearEnd,
@@ -144,7 +151,16 @@ export function PhotoGrid({
     };
   }, [photos.length, scrollTop, viewport.height, viewport.width]);
 
-  const visiblePhotos = photos.slice(layout.startIndex, layout.endIndex);
+  const visiblePhotos = useMemo(
+    () => photos.slice(layout.startIndex, layout.endIndex),
+    [photos, layout.startIndex, layout.endIndex],
+  );
+
+  // 描画対象が変わったら知らせる。描画中ではなく効果として呼び、
+  // 受け側の setState でこのコンポーネントが再描画されても循環しないようにする。
+  useEffect(() => {
+    onVisiblePhotosChange?.(visiblePhotos);
+  }, [onVisiblePhotosChange, visiblePhotos]);
 
   // PhotoCard から上がってきた shift の有無を、単体トグルか範囲選択かに振り分ける。
   const handleToggle = (photo: Photo, index: number, shiftKey: boolean) => {

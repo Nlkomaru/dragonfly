@@ -6,8 +6,10 @@
 //   /api/openapi  OpenAPI 3.1 の仕様
 //   /api/scalar   Scalar による閲覧 UI
 
+import type { APIError } from "better-auth/api";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { openAPIRouteHandler } from "hono-openapi";
 import openAPIRouter from "./openapi";
 import photosRouter from "./photos";
@@ -27,6 +29,16 @@ const handler = new Hono<ApiEnv>().basePath("/api");
 handler.onError((error, c) => {
   if (error instanceof HTTPException) {
     return c.json({ error: error.message }, error.status);
+  }
+  // better-auth（セッション / API キーの検証）が投げる例外は自前のステータスを持つ。
+  // これを拾わないと 401 も 429 もすべて 500 になり、原因が分からなくなる。
+  //
+  // instanceof ではなく形で判定する。better-auth の依存が重複解決されると
+  // 例外のクラスとここで import したクラスが別物になり、instanceof が成立しない。
+  const status = (error as { statusCode?: unknown }).statusCode;
+  if (typeof status === "number" && status >= 400 && status < 600) {
+    const message = (error as APIError).body?.message ?? error.message;
+    return c.json({ error: message }, status as ContentfulStatusCode);
   }
   console.error("unhandled api error", error);
   return c.json({ error: "internal error" }, 500);

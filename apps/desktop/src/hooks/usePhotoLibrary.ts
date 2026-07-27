@@ -3,15 +3,20 @@
 
 import { useCallback, useEffect } from "react";
 import { useAtom, useSetAtom } from "jotai";
-import { call } from "@dragonfly/api-client";
-import type { Photo, ScanResult } from "@dragonfly/core";
+import { call, subscribe } from "@dragonfly/api-client";
+import type { Photo, ScanResult, UploadProgress, UploadSummary } from "@dragonfly/core";
 import {
-  clearSelectionAtom,
+  applyUploadResultsAtom,
+  deselectPathsAtom,
   photosAtom,
   scanningAtom,
   selectedPathsAtom,
   skippedCountAtom,
+  uploadStateAtom,
 } from "../state/photos";
+
+/** Rust 側が送信 1 件ごとに発火するイベント名（`uploader.rs` と同じ値）。 */
+const UPLOAD_PROGRESS_EVENT = "upload_progress";
 
 /** Rust の `hash_photos` が返す1件分。 */
 interface PhotoHash {
@@ -24,7 +29,9 @@ export function usePhotoLibrary() {
   const [scanning, setScanning] = useAtom(scanningAtom);
   const setSkipped = useSetAtom(skippedCountAtom);
   const [selectedPaths] = useAtom(selectedPathsAtom);
-  const clearSelection = useSetAtom(clearSelectionAtom);
+  const deselect = useSetAtom(deselectPathsAtom);
+  const setUploadState = useSetAtom(uploadStateAtom);
+  const applyUploadResults = useSetAtom(applyUploadResultsAtom);
 
   /** スクリーンショットを走査し直す。メタデータの無いものは Rust 側で除外済み。 */
   const scan = useCallback(async () => {
@@ -40,14 +47,65 @@ export function usePhotoLibrary() {
     }
   }, [setPhotos, setScanning, setSkipped]);
 
-  /** 選択中の写真を AVIF に変換して送る。送信済みのものは Rust 側で除外される。 */
+  /**
+   * 選択中の写真を AVIF に変換して送る。
+   * 既に送信済みのものを再送しても、サーバーが sourceSha256 で冪等に扱うため行は増えない。
+   */
   const upload = useCallback(async () => {
     const paths = [...selectedPaths];
     if (paths.length === 0) return;
-    await call<void>("upload_photos", { paths });
-    clearSelection();
-    await scan();
-  }, [selectedPaths, clearSelection, scan]);
+
+    setUploadState({
+      processed: 0,
+      total: paths.length,
+      succeeded: 0,
+      failed: 0,
+      currentName: "",
+      done: false,
+    });
+    // 1 件終わるごとに Rust から進捗が飛んでくる。呼び出しの間だけ購読する。
+    const stop = subscribe<UploadProgress>(UPLOAD_PROGRESS_EVENT, (progress) => {
+      setUploadState((prev) =>
+        prev === null
+          ? prev
+          : {
+              ...prev,
+              processed: progress.processed,
+              total: progress.total,
+              currentName: fileNameOf(progress.currentPath),
+            },
+      );
+    });
+
+    try {
+      const summary = await call<UploadSummary>("upload_photos", { paths });
+      // 送信できたものだけを一覧に反映する。ここで再走査すると
+      // ライブラリ全体のハッシュ計算が走り、送信のたびに数分固まってしまう。
+      applyUploadResults(summary.results);
+      setUploadState({
+        processed: summary.results.length,
+        total: paths.length,
+        succeeded: summary.succeeded,
+        failed: summary.failed,
+        currentName: "",
+        done: true,
+      });
+      // 成功したものだけ選択から外す。失敗した写真は選び直さずに再送できるよう残す。
+      deselect(summary.results.filter((r) => r.uploaded).map((r) => r.path));
+    } catch (error) {
+      // コマンド自体が落ちた場合（鍵未設定など）。件数は分からないので理由だけ残す。
+      setUploadState({
+        processed: 0,
+        total: paths.length,
+        succeeded: 0,
+        failed: paths.length,
+        currentName: String(error),
+        done: true,
+      });
+    } finally {
+      stop();
+    }
+  }, [selectedPaths, deselect, setUploadState, applyUploadResults]);
 
   return { photos, scanning, scan, upload };
 }
@@ -66,6 +124,12 @@ export function useInitialPhotoScan(): void {
     hasScannedOnce = true;
     void scan();
   }, [scan]);
+}
+
+/** 絶対パスから表示用のファイル名だけを取り出す（Windows / POSIX の両方の区切りに対応）。 */
+function fileNameOf(path: string): string {
+  const index = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return index >= 0 ? path.slice(index + 1) : path;
 }
 
 /** ハッシュを計算し、サーバーに送信済みかを問い合わせて一覧に反映する。 */

@@ -4,6 +4,7 @@
  */
 
 export { assetUrl } from "./asset";
+export { subscribe } from "./event";
 
 /** Tauri の WebView 上で動いているかを判定する。 */
 export function isTauri(): boolean {

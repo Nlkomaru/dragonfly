@@ -5,19 +5,27 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "../../lib/utils";
 
 // shadcn (new-york) の button バリアント定義。
+//
+// shadcn の既定には押下時（:active）の指定が無く、neutral パレットでは
+// hover の `/90` もほとんど見分けが付かない。操作した手応えが無いと押せたか
+// 分からないため、hover を濃くしたうえで active の縮みと影の変化を足している。
+// 縮小は transform なのでレイアウトを動かさず、隣のボタンを揺らさない。
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all duration-150 ease-out active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50 disabled:active:scale-100 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground shadow-xs hover:bg-primary/90",
+        default:
+          "bg-primary text-primary-foreground shadow-xs hover:bg-primary/85 hover:shadow-sm active:bg-primary/75 active:shadow-none",
         destructive:
-          "bg-destructive text-white shadow-xs hover:bg-destructive/90 focus-visible:ring-destructive/20",
+          "bg-destructive text-white shadow-xs hover:bg-destructive/85 hover:shadow-sm active:bg-destructive/75 active:shadow-none focus-visible:ring-destructive/20",
         outline:
-          "border border-border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground",
-        secondary: "bg-secondary text-secondary-foreground shadow-xs hover:bg-secondary/80",
-        ghost: "hover:bg-accent hover:text-accent-foreground",
-        link: "text-primary underline-offset-4 hover:underline",
+          "border border-border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground hover:shadow-sm active:bg-accent/70 active:shadow-none",
+        secondary:
+          "bg-secondary text-secondary-foreground shadow-xs hover:bg-secondary/75 hover:shadow-sm active:bg-secondary/60 active:shadow-none",
+        ghost: "hover:bg-accent hover:text-accent-foreground active:bg-accent/70",
+        // リンクは面が無いので縮ませず、下線だけで状態を示す。
+        link: "text-primary underline-offset-4 hover:underline active:scale-100 active:text-primary/70",
       },
       size: {
         default: "h-9 px-4 py-2 has-[>svg]:px-3",
