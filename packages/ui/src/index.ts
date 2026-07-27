@@ -40,6 +40,11 @@ export { Toaster, toast } from "./components/ui/sonner";
 
 // dragonfly 固有の複合コンポーネント
 export { EmptyState, type EmptyStateProps } from "./components/EmptyState";
+export {
+  FilterCombobox,
+  type FilterComboboxOption,
+  type FilterComboboxProps,
+} from "./components/FilterCombobox";
 export { MonthSidebar, type MonthSidebarProps } from "./components/MonthSidebar";
 export { PhotoCard, type PhotoCardProps } from "./components/PhotoCard";
 export { PhotoDetailDialog, type PhotoDetailDialogProps } from "./components/PhotoDetailDialog";

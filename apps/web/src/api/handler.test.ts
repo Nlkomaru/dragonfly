@@ -96,6 +96,7 @@ describe("documentation", () => {
     const spec = (await res.json()) as { paths: Record<string, unknown> };
     expect(Object.keys(spec.paths).sort()).toEqual([
       "/api/v1/me",
+      "/api/v1/users/{id}/facets",
       "/api/v1/users/{id}/photos",
       "/api/v1/users/{id}/photos/check",
       "/api/v1/users/{id}/photos/{photoId}",

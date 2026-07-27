@@ -13,6 +13,7 @@ import {
   CheckPhotosRequestSchema,
   CheckPhotosResponseSchema,
   ErrorResponseSchema,
+  ListFacetsResponseSchema,
   ListPhotosQuerySchema,
   ListPhotosResponseSchema,
   ListTagsResponseSchema,
@@ -30,6 +31,7 @@ import {
   findUploadedHashes,
   getPhoto,
   insertPhoto,
+  listFacets,
   listPhotos,
   listTags,
   photoKeys,
@@ -374,6 +376,29 @@ photosRouter.get(
   validator("param", UserParamSchema),
   async (c) => {
     return c.json({ tags: await listTags(c.get("db"), c.get("ownerId")) });
+  },
+);
+
+photosRouter.get(
+  "/users/:id/facets",
+  describeRoute({
+    tags: ["photos"],
+    summary: "絞り込みに使えるワールドと VRChat ユーザーの一覧",
+    description:
+      "ID を覚えていなくても名前で選べるようにするための選択肢。" +
+      "呼び出し元自身の写真から作るので、他人の写真に出てくる名前は含まれない。" +
+      "どちらも写真の多い順で、上限を超えた分は返らない。",
+    responses: {
+      200: {
+        description: "ワールドと VRChat ユーザーの一覧",
+        content: { "application/json": { schema: resolver(ListFacetsResponseSchema) } },
+      },
+      ...commonErrorResponses,
+    },
+  }),
+  validator("param", UserParamSchema),
+  async (c) => {
+    return c.json(await listFacets(c.get("db"), c.get("ownerId")));
   },
 );
 
