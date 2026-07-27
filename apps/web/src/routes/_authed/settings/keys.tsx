@@ -47,7 +47,11 @@ function KeysPage() {
   const reload = useCallback(async () => {
     const result = await authClient.apiKey.list();
     if (result.error) throw new Error(result.error.message ?? "鍵の一覧を取得できませんでした");
-    setKeys((result.data ?? []) as unknown as KeyRow[]);
+    // `/api-key/list` が返すのは配列ではなく { apiKeys, total, limit, offset }。
+    // 素通しでキャストすると一覧の map が実行時に落ちるので、形を確かめてから入れる。
+    const list = (result.data as { apiKeys?: unknown } | null)?.apiKeys;
+    if (!Array.isArray(list)) throw new Error("鍵の一覧を取得できませんでした");
+    setKeys(list as KeyRow[]);
   }, []);
 
   useEffect(() => {
