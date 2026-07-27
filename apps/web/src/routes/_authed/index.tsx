@@ -409,6 +409,15 @@ function GalleryPage() {
     });
   }, [navigate, search.photo]);
 
+  /** 表示に使うタグ。保存中は往復を待たず、送信した値を先に見せる。 */
+  const tagsFor = useCallback(
+    (photoId: string): string[] => {
+      if (savingTagsFor === photoId && pendingTags !== null) return pendingTags;
+      return tagsById.get(photoId) ?? [];
+    },
+    [savingTagsFor, pendingTags, tagsById],
+  );
+
   const hasActiveFilters = Boolean(
     search.world ||
       search.player ||
@@ -524,7 +533,7 @@ function GalleryPage() {
         photo={detailPhoto}
         open={Boolean(search.photo)}
         onOpenChange={closeDetail}
-        tags={pendingTags ?? (search.photo ? (tagsById.get(search.photo) ?? []) : [])}
+        tags={search.photo ? tagsFor(search.photo) : []}
         tagSuggestions={tagSuggestions}
         tagsPending={savingTagsFor !== null && savingTagsFor === search.photo}
         onTagsChange={
@@ -533,7 +542,7 @@ function GalleryPage() {
         onPreview={detailPhoto ? () => openPreview(detailPhoto) : undefined}
       />
 
-      {/* 拡大表示。詳細の上に重ねて開くので、閉じると詳細に戻る。 */}
+      {/* 拡大表示。画像を左上に寄せ、右と下に情報を出してその場でタグも編集できる。 */}
       <PhotoLightbox
         photo={previewPhoto}
         open={previewPhoto !== null}
@@ -543,6 +552,13 @@ function GalleryPage() {
         imageSrc={previewPhoto ? urlById.get(previewPhoto.path) : undefined}
         onPrev={() => stepPreview(-1)}
         onNext={() => stepPreview(1)}
+        showInfo
+        tags={previewPhoto ? tagsFor(previewPhoto.path) : []}
+        onTagsChange={
+          previewPhoto ? (next) => void saveTags(previewPhoto.path, next) : undefined
+        }
+        tagSuggestions={tagSuggestions}
+        tagsPending={savingTagsFor !== null && savingTagsFor === previewPhoto?.path}
       />
 
       {tagError ? (

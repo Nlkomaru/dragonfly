@@ -18,6 +18,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 export const TAG_MAX_LENGTH = 32;
 /** 1枚に付けられるタグの上限。サーバー側の検証と同じ値。 */
 export const TAG_MAX_COUNT = 32;
+/** ワンクリック追加として並べる候補の上限。多すぎる分は combobox の検索に任せる。 */
+const QUICK_ADD_MAX = 8;
 
 export interface TagEditorProps {
   /** 現在のタグ。順序は表示順そのまま。 */
@@ -76,6 +78,9 @@ export function TagEditor({
 
   // 候補と、既に付いているタグを合わせて一覧に出す（付いているものには ✓ が付く）。
   const options = [...new Set([...value, ...suggestions])].sort((a, b) => a.localeCompare(b, "ja"));
+  // まだ付いていない候補は、開かずに押せるバッジとしても並べる（毎回 combobox を
+  // 開いて選ぶのは手数が多いため）。あふれた分は combobox の検索から選んでもらう。
+  const quickAdd = suggestions.filter((tag) => !value.includes(tag)).slice(0, QUICK_ADD_MAX);
   const normalizedQuery = normalizeTag(query);
   // 入力した語がどの候補とも一致しないときだけ「新しく作る」を出す。
   const canCreate =
@@ -96,6 +101,25 @@ export function TagEditor({
                 className="rounded-full p-0.5 opacity-70 hover:opacity-100 disabled:opacity-40"
               >
                 <X className="size-3" aria-hidden />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      ) : null}
+
+      {/* ワンクリックで付けられる候補。上限に達しているときは出しても押せないので隠す。 */}
+      {quickAdd.length > 0 && !atLimit ? (
+        <div className="flex flex-wrap gap-1">
+          {quickAdd.map((tag) => (
+            <Badge key={tag} asChild variant="outline">
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => toggleTag(tag)}
+                className="cursor-pointer text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-40"
+              >
+                <Plus aria-hidden />
+                {tag}
               </button>
             </Badge>
           ))}

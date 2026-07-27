@@ -1,8 +1,9 @@
-import type { ReactNode } from "react";
 import type { Photo } from "@dragonfly/core";
 import { Clock, Globe, Maximize2, Tag, Users } from "lucide-react";
 
+import { formatTakenAt } from "../lib/format";
 import { cn } from "../lib/utils";
+import { DetailRow } from "./DetailRow";
 import { TagEditor } from "./TagEditor";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -28,34 +29,6 @@ export interface PhotoDetailDialogProps {
   /** 画像を前面いっぱいに出す要求。渡さなければ拡大ボタンを出さない。 */
   onPreview?: () => void;
   className?: string;
-}
-
-/** 撮影日時を「2026/06/12 21:34」形式に整える。 */
-function formatTakenAt(takenAt: number): string {
-  const date = new Date(takenAt);
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-/** 見出し付きの情報行。 */
-function DetailRow({
-  icon,
-  label,
-  children,
-}: {
-  icon: ReactNode;
-  label: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex gap-3">
-      <span className="mt-0.5 text-muted-foreground [&_svg]:size-4">{icon}</span>
-      <div className="min-w-0 flex-1">
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <div className="text-sm">{children}</div>
-      </div>
-    </div>
-  );
 }
 
 /**
@@ -86,7 +59,9 @@ export function PhotoDetailDialog({
       <DialogContent className={cn("max-w-lg gap-0 sm:max-w-lg", className)}>
         {photo ? (
           <>
-            <div className="flex flex-col gap-4">
+            {/* DialogContent は grid なので、min-w-0 が無いと長いインスタンス ID が
+                グリッド子要素の最小幅を押し広げ、中身がダイアログ外にはみ出す。 */}
+            <div className="flex min-w-0 flex-col gap-4">
               <div className="flex items-start gap-2 pr-8">
                 <div className="min-w-0 flex-1">
                   <DialogTitle className="truncate">{worldName}</DialogTitle>
