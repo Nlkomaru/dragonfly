@@ -29,3 +29,17 @@ export const WithNavigation: Story = {
 
 /** 原寸画像の読み込み待ち。 */
 export const LoadingImage: Story = { args: { imageSrc: undefined } };
+
+/** Web ギャラリー。画像を左上に寄せ、右と下に情報を出してタグも編集できる。 */
+export const WithInfo: Story = {
+  args: {
+    photo: makePhoto(4),
+    imageSrc: mockThumbnail(4),
+    onPrev: () => {},
+    onNext: () => {},
+    showInfo: true,
+    tags: ["集合写真", "夜景"],
+    onTagsChange: () => {},
+    tagSuggestions: ["集合写真", "夜景", "friends+", "ワールド巡り"],
+  },
+};
