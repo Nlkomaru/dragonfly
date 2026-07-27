@@ -34,4 +34,12 @@ export const Uploaded: Story = {
 /** サムネイル生成が終わっていない状態。 */
 export const LoadingThumbnail: Story = { args: { thumbnailSrc: undefined } };
 
-export const WithDetailButton: Story = { args: { onOpen: () => {} } };
+/** 右上に詳細（ⓘ）と拡大のボタンが出る状態。ホバーすると現れる。 */
+export const WithOverlayButtons: Story = {
+  args: { onInfo: () => {}, onPreview: () => {} },
+};
+
+/** 閲覧モード。チェックボックスを出さず、カードのクリックで拡大する。 */
+export const ViewOnly: Story = {
+  args: { selectable: false, onInfo: () => {}, onPreview: () => {} },
+};

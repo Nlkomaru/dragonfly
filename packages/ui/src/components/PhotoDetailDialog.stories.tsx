@@ -31,3 +31,12 @@ export const WithoutPlayersAndTags: Story = {
 
 /** 原寸画像の読み込み待ち。 */
 export const LoadingImage: Story = { args: { imageSrc: undefined } };
+
+/** Web ギャラリー。タグを編集でき、画像から拡大表示に入れる。 */
+export const Editable: Story = {
+  args: {
+    onTagsChange: () => {},
+    tagSuggestions: ["集合写真", "夜景", "friends+", "ワールド巡り"],
+    onPreview: () => {},
+  },
+};

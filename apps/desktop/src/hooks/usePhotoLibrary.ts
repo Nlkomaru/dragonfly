@@ -72,6 +72,10 @@ export function usePhotoLibrary() {
               ...prev,
               processed: progress.processed,
               total: progress.total,
+              // 成否は Rust 側が 1 枚ごとに確定させて送ってくる。
+              // 完了を待たずにここで反映しないと、送信中ずっと「成功 0」に見えてしまう。
+              succeeded: progress.succeeded,
+              failed: progress.failed,
               currentName: fileNameOf(progress.currentPath),
             },
       );

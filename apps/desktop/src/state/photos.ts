@@ -104,13 +104,6 @@ export const selectRangeAtom = atom(null, (get, set, paths: string[]) => {
   set(selectedPathsAtom, next);
 });
 
-/** 表示中のものを全選択する。 */
-export const selectAllVisibleAtom = atom(null, (get, set) => {
-  const next = new Set(get(selectedPathsAtom));
-  for (const photo of get(visiblePhotosAtom)) next.add(photo.path);
-  set(selectedPathsAtom, next);
-});
-
 /**
  * 送信結果を一覧に反映する。
  * 送信のたびに全件を再走査すると数分待たされるので、結果の写真だけを更新する。

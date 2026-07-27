@@ -107,12 +107,18 @@ pub struct UploadSummary {
 }
 
 /// 送信の進捗。
+/// 1 枚終わるごとに成否が確定するので、待っている間に内訳が動くよう
+/// 完了件数だけでなく成功・失敗の数もその都度送る。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadProgress {
     pub processed: usize,
     pub total: usize,
     pub current_path: String,
+    /// ここまでに送信できた件数（重複扱いも成功に数える）。
+    pub succeeded: usize,
+    /// ここまでに失敗した件数。
+    pub failed: usize,
 }
 
 /// API 呼び出しに必要な情報をひとまとめにする。API キーはここから外に出さない。
@@ -338,6 +344,8 @@ pub async fn upload_photos(app: AppHandle, paths: Vec<String>) -> Result<UploadS
     // 並列実行なので完了順は入力順と一致しない。進捗は完了件数のカウンタで数える。
     let converted = Arc::new(AtomicUsize::new(0));
     let uploaded = Arc::new(AtomicUsize::new(0));
+    // 成功だけを別に数える。失敗は「完了 - 成功」で出せるので、カウンタは 1 本で足りる。
+    let succeeded = Arc::new(AtomicUsize::new(0));
 
     let mut tasks = Vec::with_capacity(total);
     for path in paths.into_iter() {
@@ -346,6 +354,7 @@ pub async fn upload_photos(app: AppHandle, paths: Vec<String>) -> Result<UploadS
         let app = app.clone();
         let converted = converted.clone();
         let uploaded = uploaded.clone();
+        let succeeded = succeeded.clone();
         tasks.push(tauri::async_runtime::spawn(async move {
             let _permit = permits.acquire_owned().await.expect("semaphore is open");
             let path = PathBuf::from(&path);
@@ -372,12 +381,22 @@ pub async fn upload_photos(app: AppHandle, paths: Vec<String>) -> Result<UploadS
                 },
             };
 
+            // 成功を先に数えてから完了を数える。逆順だと、他のタスクが成功を
+            // 加える前に完了だけが増えて、失敗数が一瞬多く見えてしまう。
+            if outcome.uploaded {
+                succeeded.fetch_add(1, Ordering::Relaxed);
+            }
+            let done = uploaded.fetch_add(1, Ordering::Relaxed) + 1;
+            let ok = succeeded.load(Ordering::Relaxed);
             let _ = app.emit(
                 UPLOAD_PROGRESS_EVENT,
                 UploadProgress {
-                    processed: uploaded.fetch_add(1, Ordering::Relaxed) + 1,
+                    processed: done,
                     total,
                     current_path: display,
+                    succeeded: ok,
+                    // 並列なので ok が done を一時的に上回りうる。差が負にならないようにする。
+                    failed: done.saturating_sub(ok),
                 },
             );
             outcome

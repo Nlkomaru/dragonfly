@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import type { Photo } from "@dragonfly/core";
@@ -6,10 +6,13 @@ import { Images, RefreshCw, Upload } from "lucide-react";
 import {
   Button,
   EmptyState,
+  PhotoDetailDialog,
   PhotoGrid,
+  PhotoLightbox,
   SelectionActionBar,
   UploadProgressBar,
 } from "@dragonfly/ui";
+import { assetUrl } from "@dragonfly/api-client";
 import {
   activeMonthAtom,
   clearSelectionAtom,
@@ -43,6 +46,40 @@ function Index() {
   const skippedCount = useAtomValue(skippedCountAtom);
   const [uploadState, setUploadState] = useAtom(uploadStateAtom);
   const uploading = useAtomValue(uploadingAtom);
+
+  // 詳細（ⓘ）と拡大表示の対象。どちらも一時的な表示なので、アトムにせず画面に持つ。
+  const [detailPhoto, setDetailPhoto] = useState<Photo | null>(null);
+  const [previewPhoto, setPreviewPhoto] = useState<Photo | null>(null);
+  // 拡大表示に使う URL。元の PNG を asset プロトコル越しに読む。
+  // 詳細ダイアログは 60vh に収まるのでサムネイルで足り、原寸はここでしか使わない
+  // （4K PNG を毎回デコードさせると、ⓘ を押すたびに固まってしまう）。
+  const [fullSizeSrc, setFullSizeSrc] = useState<string>();
+  useEffect(() => {
+    if (!previewPhoto) {
+      setFullSizeSrc(undefined);
+      return;
+    }
+    let cancelled = false;
+    void assetUrl(previewPhoto.path).then((url) => {
+      if (!cancelled) setFullSizeSrc(url);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [previewPhoto]);
+
+  /** 拡大表示のまま前後の写真へ移動する。表示中の並び順をそのまま辿る。 */
+  const stepPreview = useCallback(
+    (delta: number) => {
+      setPreviewPhoto((current) => {
+        if (!current) return current;
+        const index = visiblePhotos.findIndex((photo) => photo.path === current.path);
+        // 端では止める。巡回させると、どこまで見たのか分からなくなる。
+        return visiblePhotos[index + delta] ?? current;
+      });
+    },
+    [visiblePhotos],
+  );
 
   // サムネイルの生成はグリッドが実際に描いている写真の分だけ要求する。
   const { thumbnailSrcFor, requestThumbnails } = useThumbnails();
@@ -100,9 +137,34 @@ function Index() {
             }
             thumbnailSrcFor={(photo) => thumbnailSrcFor(photo.path)}
             onVisiblePhotosChange={handleVisiblePhotosChange}
+            onInfo={setDetailPhoto}
+            onPreview={setPreviewPhoto}
           />
         )}
       </main>
+
+      {/* 詳細。タグはサーバー側のものなので、ローカルでは編集させない。 */}
+      <PhotoDetailDialog
+        photo={detailPhoto}
+        open={detailPhoto !== null}
+        onOpenChange={(open) => {
+          if (!open) setDetailPhoto(null);
+        }}
+        imageSrc={detailPhoto ? thumbnailSrcFor(detailPhoto.path) : undefined}
+        onPreview={detailPhoto ? () => setPreviewPhoto(detailPhoto) : undefined}
+      />
+
+      {/* 拡大表示。詳細の上に重ねるので、閉じると詳細に戻る。 */}
+      <PhotoLightbox
+        photo={previewPhoto}
+        open={previewPhoto !== null}
+        onOpenChange={(open) => {
+          if (!open) setPreviewPhoto(null);
+        }}
+        imageSrc={fullSizeSrc}
+        onPrev={() => stepPreview(-1)}
+        onNext={() => stepPreview(1)}
+      />
 
       {/* 選択は月をまたいで保持されるため、内訳を出して誤送信を防ぐ。 */}
       {/* 設定画面では出したくないので、この画面の中に置いて下部に浮かせる。 */}

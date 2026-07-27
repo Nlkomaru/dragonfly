@@ -56,11 +56,23 @@ export interface UploadSummary {
   failed: number;
 }
 
-/** `upload_progress` / `convert_progress` イベントの本体。 */
-export interface UploadProgress {
+/** `convert_progress` イベントの本体。変換に着手した件数だけを持つ。 */
+export interface ConvertProgress {
   processed: number;
   total: number;
   currentPath: string;
+}
+
+/**
+ * `upload_progress` イベントの本体。
+ * 成否は 1 枚終わるごとに確定するため、待っている間に内訳が動くよう
+ * 変換側とは違って `succeeded` / `failed` も一緒に送る。
+ */
+export interface UploadProgress extends ConvertProgress {
+  /** ここまでに送信できた件数（重複扱いも成功に数える）。 */
+  succeeded: number;
+  /** ここまでに失敗した件数。 */
+  failed: number;
 }
 
 /** 一覧・詳細で返す写真。 */
@@ -77,6 +89,21 @@ export interface ApiPhoto {
   byteSize: number;
   world: WorldRef | null;
   players: PlayerRef[];
+  tags: string[];
+}
+
+/** 写真 1 枚のタグを置き換える要求。ここに無いタグはその写真から外れる。 */
+export interface PutPhotoTagsRequest {
+  tags: string[];
+}
+
+export interface PutPhotoTagsResponse {
+  /** 反映後のタグ。 */
+  tags: string[];
+}
+
+/** タグ入力の補完に使う、そのユーザーが使ったことのあるタグ名。 */
+export interface ListTagsResponse {
   tags: string[];
 }
 
