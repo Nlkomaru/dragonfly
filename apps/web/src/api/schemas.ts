@@ -9,6 +9,7 @@ import type {
   ApiPhoto,
   CheckPhotosRequest,
   CheckPhotosResponse,
+  ListFacetsResponse,
   ListPhotosResponse,
   ListTagsResponse,
   MeResponse,
@@ -94,10 +95,35 @@ export const ListTagsResponseSchema = z.object({
   tags: z.array(z.string()).meta({ description: "このユーザーが使ったことのあるタグ名" }),
 });
 
+/** GET /facets のレスポンス。絞り込み UI の選択肢。 */
+export const ListFacetsResponseSchema = z.object({
+  worlds: z
+    .array(
+      z.object({
+        id: z.string().meta({ description: "VRChat のワールド ID", example: "wrld_00000000" }),
+        name: z.string().meta({ description: "最後に記録された表示名" }),
+        count: z.number().int().meta({ description: "このワールドで撮った枚数" }),
+      }),
+    )
+    .meta({ description: "写真の多い順" }),
+  players: z
+    .array(
+      z.object({
+        id: z.string().meta({ description: "VRChat のユーザー ID", example: "usr_00000000" }),
+        displayName: z.string(),
+        count: z.number().int().meta({ description: "この人が写っている / 撮った枚数" }),
+      }),
+    )
+    .meta({ description: "写真の多い順" }),
+});
+
 /** GET /photos のクエリ。数値は文字列から変換し、変換できない値は 400 で弾く。 */
 export const ListPhotosQuerySchema = z.object({
   world: z.string().optional().meta({ description: "ワールド ID で絞る" }),
-  player: z.string().optional().meta({ description: "同席していた VRChat ユーザー ID で絞る" }),
+  player: z
+    .string()
+    .optional()
+    .meta({ description: "VRChat ユーザー ID で絞る（同席者、または撮影者として一致）" }),
   tag: z.string().optional().meta({ description: "タグ名で絞る" }),
   from: z.coerce.number().int().optional().meta({ description: "撮影日時の下限（unix ミリ秒）" }),
   to: z.coerce.number().int().optional().meta({ description: "撮影日時の上限（unix ミリ秒）" }),
@@ -179,3 +205,4 @@ type _Me = Assignable<z.infer<typeof MeResponseSchema>, MeResponse>;
 type _PutTagsRequest = Assignable<z.infer<typeof PutPhotoTagsRequestSchema>, PutPhotoTagsRequest>;
 type _PutTagsResponse = Assignable<z.infer<typeof PutPhotoTagsResponseSchema>, PutPhotoTagsResponse>;
 type _ListTags = Assignable<z.infer<typeof ListTagsResponseSchema>, ListTagsResponse>;
+type _ListFacets = Assignable<z.infer<typeof ListFacetsResponseSchema>, ListFacetsResponse>;

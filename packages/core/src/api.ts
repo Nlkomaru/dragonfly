@@ -107,6 +107,32 @@ export interface ListTagsResponse {
   tags: string[];
 }
 
+/** 絞り込みの選択肢に出すワールド。ID ではなく名前で選べるようにするためのもの。 */
+export interface WorldFacet {
+  id: string;
+  /** 最後に記録された表示名。空文字なら名前が取れていない。 */
+  name: string;
+  /** そのユーザーの写真のうち、このワールドで撮られた枚数。並び順に使う。 */
+  count: number;
+}
+
+/** 絞り込みの選択肢に出す VRChat ユーザー（撮影者と同席者の両方）。 */
+export interface PlayerFacet {
+  id: string;
+  displayName: string;
+  /** そのユーザーの写真のうち、この人が写っている（撮った）枚数。 */
+  count: number;
+}
+
+/**
+ * 絞り込み UI の選択肢。呼び出し元自身の写真から作るので、
+ * 他人の写真に出てくるワールドや人は決して含まれない。
+ */
+export interface ListFacetsResponse {
+  worlds: WorldFacet[];
+  players: PlayerFacet[];
+}
+
 export interface ListPhotosResponse {
   photos: ApiPhoto[];
   /** 次ページのカーソル。これ以上無ければ null。 */

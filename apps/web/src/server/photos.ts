@@ -3,8 +3,13 @@
 // すべての関数は「所有者 (ownerId) を必ず引数で受け取る」形にしてある。
 // 認証済みユーザー以外のデータに触れる経路を型の上で作らないための約束事。
 
-import type { ApiPhoto, ListPhotosResponse, UploadPhotoMetadata } from "@dragonfly/core";
-import { and, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
+import type {
+  ApiPhoto,
+  ListFacetsResponse,
+  ListPhotosResponse,
+  UploadPhotoMetadata,
+} from "@dragonfly/core";
+import { and, desc, eq, gte, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import type { DrizzleDb } from "../db/client";
 import { photoPlayers, photoTags, photos, tags, vrcUsers, worlds } from "../db/schema";
@@ -253,9 +258,14 @@ export async function listPhotos(
 
   if (filters.worldId) conditions.push(eq(photos.worldId, filters.worldId));
   if (filters.playerId) {
-    conditions.push(
+    // 撮影者は photo_players に入らず photos.author_id にだけ載る。
+    // 「その人が写っている写真」を探すとき、自分で撮った分が落ちるのは直感に反するので
+    // 同席者と撮影者のどちらかに一致すれば拾う。
+    const byPlayer = or(
       sql`EXISTS (SELECT 1 FROM photo_players pp WHERE pp.photo_id = ${photos.id} AND pp.user_id = ${filters.playerId})`,
+      eq(photos.authorId, filters.playerId),
     );
+    if (byPlayer) conditions.push(byPlayer);
   }
   if (filters.tag) {
     // タグ名はユーザーごとの名前空間なので owner_id でも絞る。
@@ -425,6 +435,70 @@ export async function listTags(db: DrizzleDb, ownerId: string): Promise<string[]
     .where(eq(tags.ownerId, ownerId))
     .orderBy(tags.name);
   return rows.map((row) => row.name);
+}
+
+/**
+ * 絞り込みの選択肢に出す上限。写真の多いものから順に返し、あふれた分は捨てる。
+ * 個人のライブラリならこの数で足りる想定なので、サーバー側の検索は用意していない。
+ */
+const FACET_LIMIT = 300;
+
+/**
+ * ワールドと VRChat ユーザーの一覧を、そのユーザーの写真から作る。
+ * ID を覚えていなくても名前で絞り込めるようにするための選択肢。
+ *
+ * worlds / vrc_users は所有者を持たない共有テーブルなので、必ず photos 側で
+ * owner_id を効かせる。直接引くと他人の写真に出てくる名前まで漏れる。
+ */
+export async function listFacets(
+  db: DrizzleDb,
+  ownerId: string,
+): Promise<ListFacetsResponse> {
+  // ワールド名は photos に非正規化されているので、worlds への join は要らない。
+  const worldRows = await db
+    .select({
+      id: photos.worldId,
+      // 名前が変わっていても 1 つに寄せる。
+      name: sql<string | null>`MAX(${photos.worldName})`,
+      count: sql<number>`COUNT(*)`,
+    })
+    .from(photos)
+    .where(and(eq(photos.ownerId, ownerId), isNotNull(photos.worldId)))
+    .groupBy(photos.worldId)
+    .orderBy(sql`COUNT(*) DESC`)
+    .limit(FACET_LIMIT);
+
+  // 同席者と撮影者を 1 つの集合にまとめる。listPhotos の player 絞り込みが
+  // 両方を見るので、選択肢もそれに揃える（片方だけだと 0 件になる候補が出る）。
+  const playerRows = await db.all<{ id: string; displayName: string; count: number }>(sql`
+    SELECT u.id AS id, u.display_name AS displayName, COUNT(*) AS count
+    FROM (
+      SELECT pp.user_id AS user_id, pp.photo_id AS photo_id
+      FROM photo_players pp
+      JOIN photos p ON p.id = pp.photo_id
+      WHERE p.owner_id = ${ownerId}
+      UNION
+      SELECT p.author_id AS user_id, p.id AS photo_id
+      FROM photos p
+      WHERE p.owner_id = ${ownerId} AND p.author_id IS NOT NULL
+    ) AS pairs
+    JOIN vrc_users u ON u.id = pairs.user_id
+    GROUP BY u.id
+    ORDER BY count DESC
+    LIMIT ${FACET_LIMIT}
+  `);
+
+  return {
+    worlds: worldRows.flatMap((row) =>
+      // isNotNull で除いてあるが、型の上では null が残るのでここでも落とす。
+      row.id ? [{ id: row.id, name: row.name ?? "", count: Number(row.count) }] : [],
+    ),
+    players: playerRows.map((row) => ({
+      id: row.id,
+      displayName: row.displayName,
+      count: Number(row.count),
+    })),
+  };
 }
 
 /** R2 のキーだけを引く。所有者条件込みなので、画像配信の権限チェックを兼ねる。 */

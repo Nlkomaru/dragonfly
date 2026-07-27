@@ -5,6 +5,7 @@
 
 import type {
   ApiPhoto,
+  ListFacetsResponse,
   ListPhotosResponse,
   ListTagsResponse,
   Photo,
@@ -12,12 +13,15 @@ import type {
 } from "@dragonfly/core";
 import {
   Button,
+  cn,
   EmptyState,
+  FilterCombobox,
   Input,
   Label,
   PhotoDetailDialog,
   PhotoGrid,
   PhotoLightbox,
+  type FilterComboboxOption,
 } from "@dragonfly/ui";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
@@ -148,10 +152,11 @@ function GalleryPage() {
   const [pendingTags, setPendingTags] = useState<string[] | null>(null);
   const [tagError, setTagError] = useState<string | null>(null);
 
-  // フィルタ入力の下書き。Apply で URL に反映する。
-  const [draftWorld, setDraftWorld] = useState(search.world ?? "");
-  const [draftPlayer, setDraftPlayer] = useState(search.player ?? "");
-  const [draftTag, setDraftTag] = useState(search.tag ?? "");
+  // 絞り込みの選択肢（ワールド / VRChat ユーザー）。ID を覚えていなくても名前で選べるようにする。
+  const [facets, setFacets] = useState<ListFacetsResponse>({ worlds: [], players: [] });
+
+  // 日付だけは打ち終わりが分からないので下書きにし、「絞り込み」で URL に反映する。
+  // ワールド / プレイヤー / タグは選んだ時点で確定するので、その場で URL に載せる。
   const [draftFrom, setDraftFrom] = useState(msToDatetimeLocal(search.from));
   const [draftTo, setDraftTo] = useState(msToDatetimeLocal(search.to));
 
@@ -163,14 +168,11 @@ function GalleryPage() {
     setDetailExtra(null);
   }, [loaderData]);
 
-  // URL のフィルタが変わったら下書きも揃える（戻る・共有 URL 直開き）。
+  // URL の期間が変わったら下書きも揃える（戻る・共有 URL 直開き）。
   useEffect(() => {
-    setDraftWorld(search.world ?? "");
-    setDraftPlayer(search.player ?? "");
-    setDraftTag(search.tag ?? "");
     setDraftFrom(msToDatetimeLocal(search.from));
     setDraftTo(msToDatetimeLocal(search.to));
-  }, [search.world, search.player, search.tag, search.from, search.to]);
+  }, [search.from, search.to]);
 
   // 詳細 ID が一覧に無いときだけ単体 GET する。
   useEffect(() => {
@@ -255,6 +257,54 @@ function GalleryPage() {
       cancelled = true;
     };
   }, []);
+
+  // 絞り込みの選択肢も一度だけ取る。フィルタを変えるたびに取り直す必要は無いので
+  // loader には載せない。失敗しても ID 直打ち（共有 URL）は効くので黙って諦める。
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/v1/users/me/facets", { credentials: "include" });
+        if (!res.ok) return;
+        const body = (await res.json()) as ListFacetsResponse;
+        if (!cancelled) setFacets(body);
+      } catch {
+        // 選択肢なしで続行する。
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 名前で探せるように label は名前、value は ID。ID もキーワードに入れて直接引けるようにする。
+  const worldOptions: FilterComboboxOption[] = useMemo(
+    () =>
+      facets.worlds.map((world) => ({
+        value: world.id,
+        // 名前が取れていない古い行は ID をそのまま見せる。
+        label: world.name || world.id,
+        keywords: [world.id],
+        hint: String(world.count),
+      })),
+    [facets.worlds],
+  );
+
+  const playerOptions: FilterComboboxOption[] = useMemo(
+    () =>
+      facets.players.map((player) => ({
+        value: player.id,
+        label: player.displayName || player.id,
+        keywords: [player.id],
+        hint: String(player.count),
+      })),
+    [facets.players],
+  );
+
+  const tagOptions: FilterComboboxOption[] = useMemo(
+    () => tagSuggestions.map((tag) => ({ value: tag, label: tag })),
+    [tagSuggestions],
+  );
 
   /** 詳細ダイアログのタグを保存する。成功したら手元の一覧にも反映する。 */
   const saveTags = useCallback(
@@ -373,28 +423,34 @@ function GalleryPage() {
     [navigate],
   );
 
-  const applyFilters = useCallback(
+  /** 選択式のフィルタ（ワールド / プレイヤー / タグ）をその場で URL に反映する。 */
+  const applyFacet = useCallback(
+    (key: "world" | "player" | "tag", value: string | undefined) => {
+      void navigate({
+        // 他のフィルタは触らない。詳細だけは中身が変わるので閉じる。
+        search: (prev) => ({ ...prev, [key]: value, photo: undefined }),
+      });
+    },
+    [navigate],
+  );
+
+  /** 期間の下書きを URL に反映する。 */
+  const applyRange = useCallback(
     (event: FormEvent) => {
       event.preventDefault();
       void navigate({
-        search: {
-          world: draftWorld.trim() || undefined,
-          player: draftPlayer.trim() || undefined,
-          tag: draftTag.trim() || undefined,
+        search: (prev) => ({
+          ...prev,
           from: datetimeLocalToMs(draftFrom),
           to: datetimeLocalToMs(draftTo),
-          // フィルタ変更時は詳細を閉じる。
           photo: undefined,
-        },
+        }),
       });
     },
-    [navigate, draftWorld, draftPlayer, draftTag, draftFrom, draftTo],
+    [navigate, draftFrom, draftTo],
   );
 
   const clearFilters = useCallback(() => {
-    setDraftWorld("");
-    setDraftPlayer("");
-    setDraftTag("");
     setDraftFrom("");
     setDraftTo("");
     void navigate({
@@ -430,34 +486,41 @@ function GalleryPage() {
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {/* フィルタバー。値は URL に載せ、共有・リロードで再現する。 */}
       <form
-        onSubmit={applyFilters}
+        onSubmit={applyRange}
         className="flex shrink-0 flex-wrap items-end gap-3 border-b px-4 py-3"
       >
-        <FilterField id="filter-world" label="ワールド ID">
-          <Input
+        {/* ワールド名は長いので、他のフィールドより広めに取る。 */}
+        <FilterField id="filter-world" label="ワールド" className="w-64">
+          <FilterCombobox
             id="filter-world"
-            value={draftWorld}
-            onChange={(e) => setDraftWorld(e.target.value)}
-            placeholder="wrld_..."
-            autoComplete="off"
+            value={search.world}
+            onChange={(next) => applyFacet("world", next)}
+            options={worldOptions}
+            placeholder="すべてのワールド"
+            searchPlaceholder="ワールド名 / ID で検索"
+            emptyText="一致するワールドがありません"
           />
         </FilterField>
-        <FilterField id="filter-player" label="プレイヤー ID">
-          <Input
+        <FilterField id="filter-player" label="プレイヤー" className="w-56">
+          <FilterCombobox
             id="filter-player"
-            value={draftPlayer}
-            onChange={(e) => setDraftPlayer(e.target.value)}
-            placeholder="usr_..."
-            autoComplete="off"
+            value={search.player}
+            onChange={(next) => applyFacet("player", next)}
+            options={playerOptions}
+            placeholder="すべてのプレイヤー"
+            searchPlaceholder="表示名 / ID で検索"
+            emptyText="一致するプレイヤーがいません"
           />
         </FilterField>
         <FilterField id="filter-tag" label="タグ">
-          <Input
+          <FilterCombobox
             id="filter-tag"
-            value={draftTag}
-            onChange={(e) => setDraftTag(e.target.value)}
-            placeholder="tag"
-            autoComplete="off"
+            value={search.tag}
+            onChange={(next) => applyFacet("tag", next)}
+            options={tagOptions}
+            placeholder="すべてのタグ"
+            searchPlaceholder="タグを検索"
+            emptyText="一致するタグがありません"
           />
         </FilterField>
         <FilterField id="filter-from" label="From">
@@ -477,8 +540,9 @@ function GalleryPage() {
           />
         </FilterField>
         <div className="flex items-center gap-2 pb-0.5">
+          {/* 選択式のフィルタは選んだ時点で効くので、このボタンが要るのは期間だけ。 */}
           <Button type="submit" size="sm">
-            絞り込み
+            期間を適用
           </Button>
           {hasActiveFilters ? (
             <Button type="button" size="sm" variant="ghost" onClick={clearFilters}>
@@ -575,13 +639,16 @@ function FilterField({
   id,
   label,
   children,
+  className,
 }: {
   id: string;
   label: string;
   children: ReactNode;
+  /** 幅を変えたいときだけ渡す（既定は w-40）。 */
+  className?: string;
 }) {
   return (
-    <div className="flex w-40 min-w-0 flex-col gap-1">
+    <div className={cn("flex w-40 min-w-0 flex-col gap-1", className)}>
       <Label htmlFor={id} className="text-xs text-muted-foreground">
         {label}
       </Label>
