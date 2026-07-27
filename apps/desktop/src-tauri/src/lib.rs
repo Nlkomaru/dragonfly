@@ -7,6 +7,7 @@ pub mod hash;
 pub mod metadata;
 pub mod scanner;
 pub mod settings;
+pub mod thumbnails;
 pub mod uploader;
 
 /// Tauri アプリのエントリポイント。プラグイン登録とコマンド定義をここに集約する。
@@ -32,6 +33,11 @@ pub fn run() {
             if let Err(e) = scanner::allow_root_dir_asset_scope(app.handle()) {
                 eprintln!("warning: {e}");
             }
+            // サムネイルキャッシュも同じく asset プロトコルから読めるようにする。
+            // ここを忘れると一覧の画像だけが実行時に 403 になる。
+            if let Err(e) = thumbnails::allow_cache_dir_asset_scope(app.handle()) {
+                eprintln!("warning: {e}");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -43,6 +49,7 @@ pub fn run() {
             settings::pick_screenshot_dir,
             scanner::scan_photos,
             hash::hash_photos,
+            thumbnails::thumbnail_paths,
             uploader::check_uploaded,
             uploader::upload_photos,
             uploader::test_connection,

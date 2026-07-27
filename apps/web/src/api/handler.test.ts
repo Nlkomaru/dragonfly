@@ -12,8 +12,17 @@ vi.mock("cloudflare:workers", () => ({ env: {}, waitUntil: () => {} }));
 const currentSession = vi.hoisted(() => ({
   value: null as { user: { id: string; name: string } } | null,
 }));
+// better-auth が投げる例外（レート制限など）の扱いも見たいので、差し込めるようにする。
+const sessionError = vi.hoisted(() => ({ value: null as Error | null }));
 vi.mock("../server/context", () => ({
-  getAuth: () => ({ api: { getSession: async () => currentSession.value } }),
+  getAuth: () => ({
+    api: {
+      getSession: async () => {
+        if (sessionError.value) throw sessionError.value;
+        return currentSession.value;
+      },
+    },
+  }),
 }));
 
 // 画像本体は R2 / D1 に触るので、認可を抜けたあとは固定レスポンスに差し替える。
@@ -51,7 +60,33 @@ const bindings = {
 
 beforeEach(() => {
   currentSession.value = null;
+  sessionError.value = null;
   streamPhotoObject.mockClear();
+});
+
+describe("error mapping", () => {
+  it("keeps the status of a better-auth APIError instead of turning it into a 500", async () => {
+    const { APIError } = await import("better-auth/api");
+    sessionError.value = new APIError("TOO_MANY_REQUESTS", { message: "Rate limit exceeded." });
+
+    const res = await handler.request("/api/v1/me", {}, bindings);
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({ error: "Rate limit exceeded." });
+  });
+
+  it("maps by shape, so a duplicated better-auth copy is still handled", async () => {
+    // 依存が重複解決されると例外のクラスが別物になる。instanceof に頼っていないことの確認。
+    sessionError.value = Object.assign(new Error("nope"), { statusCode: 401 });
+
+    const res = await handler.request("/api/v1/me", {}, bindings);
+    expect(res.status).toBe(401);
+  });
+
+  it("still returns 500 for an error without a status", async () => {
+    sessionError.value = new Error("boom");
+    const res = await handler.request("/api/v1/me", {}, bindings);
+    expect(res.status).toBe(500);
+  });
 });
 
 describe("documentation", () => {

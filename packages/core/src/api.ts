@@ -35,6 +35,34 @@ export interface UploadPhotoResponse {
   deduplicated: boolean;
 }
 
+/**
+ * デスクトップの `upload_photos` が返す 1 枚分の結果。
+ * 1 枚の失敗で全体を止めないため、成否と理由を写真ごとに持ち帰る。
+ */
+export interface UploadOutcome {
+  /** 送信元のローカルパス。写真一覧のキーと同じ値。 */
+  path: string;
+  sha256: string | null;
+  uploaded: boolean;
+  /** 既にサーバーにあった場合は true（送信自体は成功扱い）。 */
+  deduplicated: boolean;
+  error: string | null;
+}
+
+/** `upload_photos` の戻り値。 */
+export interface UploadSummary {
+  results: UploadOutcome[];
+  succeeded: number;
+  failed: number;
+}
+
+/** `upload_progress` / `convert_progress` イベントの本体。 */
+export interface UploadProgress {
+  processed: number;
+  total: number;
+  currentPath: string;
+}
+
 /** 一覧・詳細で返す写真。 */
 export interface ApiPhoto {
   id: string;

@@ -30,8 +30,8 @@ hex = "0.4"              # ハッシュの16進表現
 chrono = "0.4"           # ファイル名 / mtime のローカル時刻解釈
 flate2 = "1"             # iTXt の zlib 圧縮テキスト展開
 num_cpus = "1"           # 変換の同時実行数
-# PNG のデコードだけできれば良いので機能を絞る。
-image = { version = "0.25", default-features = false, features = ["png"] }
+# PNG のデコードと、一覧用サムネイルの JPEG 書き出しだけできれば良い。
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # AVIF エンコード（純 Rust）。asm 機能はビルドに nasm を要求するため既定では外す。
 # 速度が必要なら nasm を用意したうえで features = ["asm"] を足す。
 ravif = { version = "0.11", default-features = false, features = ["threading"] }

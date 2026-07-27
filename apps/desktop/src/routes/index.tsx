@@ -1,7 +1,15 @@
+import { useCallback } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { Images, RefreshCw } from "lucide-react";
-import { Button, EmptyState, PhotoGrid, SelectionActionBar } from "@dragonfly/ui";
+import type { Photo } from "@dragonfly/core";
+import { Images, RefreshCw, Upload } from "lucide-react";
+import {
+  Button,
+  EmptyState,
+  PhotoGrid,
+  SelectionActionBar,
+  UploadProgressBar,
+} from "@dragonfly/ui";
 import {
   activeMonthAtom,
   clearSelectionAtom,
@@ -11,6 +19,8 @@ import {
   selectedPhotosAtom,
   skippedCountAtom,
   togglePhotoAtom,
+  uploadStateAtom,
+  uploadingAtom,
   visiblePhotosAtom,
 } from "../state/photos";
 import { usePhotoLibrary } from "../hooks/usePhotoLibrary";
@@ -31,8 +41,15 @@ function Index() {
   const clearSelection = useSetAtom(clearSelectionAtom);
   const scanning = useAtomValue(scanningAtom);
   const skippedCount = useAtomValue(skippedCountAtom);
+  const [uploadState, setUploadState] = useAtom(uploadStateAtom);
+  const uploading = useAtomValue(uploadingAtom);
 
-  const thumbnailSrcFor = useThumbnails(visiblePhotos.map((photo) => photo.path));
+  // サムネイルの生成はグリッドが実際に描いている写真の分だけ要求する。
+  const { thumbnailSrcFor, requestThumbnails } = useThumbnails();
+  const handleVisiblePhotosChange = useCallback(
+    (photos: Photo[]) => requestThumbnails(photos.map((photo) => photo.path)),
+    [requestThumbnails],
+  );
 
   return (
     // サイドバーは root にあるので、この画面は右側の中身だけを描く。
@@ -52,6 +69,19 @@ function Index() {
           </Button>
         </header>
 
+        {/* 何枚中の何枚が送れたのかは送信中いちばん知りたい情報なので、常に上に出す。 */}
+        {uploadState && (
+          <UploadProgressBar
+            processed={uploadState.processed}
+            total={uploadState.total}
+            succeeded={uploadState.succeeded}
+            failed={uploadState.failed}
+            currentName={uploadState.currentName}
+            done={uploadState.done}
+            onDismiss={() => setUploadState(null)}
+          />
+        )}
+
         {visiblePhotos.length === 0 ? (
           <EmptyState
             icon={Images}
@@ -69,6 +99,7 @@ function Index() {
               selectRange(visiblePhotos.slice(from, to + 1).map((photo) => photo.path))
             }
             thumbnailSrcFor={(photo) => thumbnailSrcFor(photo.path)}
+            onVisiblePhotosChange={handleVisiblePhotosChange}
           />
         )}
       </main>
@@ -79,7 +110,13 @@ function Index() {
         className="absolute bottom-4 left-1/2 -translate-x-1/2"
         selectedPhotos={selectedPhotos}
         onClear={clearSelection}
-        actions={<Button onClick={() => void upload()}>アップロード</Button>}
+        actions={
+          <Button onClick={() => void upload()} disabled={uploading}>
+            <Upload aria-hidden />
+            {/* 押す前に何枚送るのかが分かるよう、件数をラベルに入れる。 */}
+            {uploading ? "送信中…" : `${selectedPhotos.length} 枚をアップロード`}
+          </Button>
+        }
       />
     </div>
   );

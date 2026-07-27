@@ -13,6 +13,30 @@ export const skippedCountAtom = atom(0);
 /** 走査中かどうか。走査中は再走査ボタンを止める。 */
 export const scanningAtom = atom(false);
 
+/** 送信の進行状況。null なら送信していない。 */
+export interface UploadState {
+  /** 送信が終わった件数（成功・失敗を問わない）。 */
+  processed: number;
+  total: number;
+  /** 送信に成功した件数。 */
+  succeeded: number;
+  /** 送信に失敗した件数。 */
+  failed: number;
+  /** 直近で処理した写真のファイル名。どこまで進んだかを示す。 */
+  currentName: string;
+  /** 全件終わったか。終了後もサマリを出したままにするため、null に戻さず持つ。 */
+  done: boolean;
+}
+
+/** 送信の進行状況。アクションバーとヘッダーの表示に使う。 */
+export const uploadStateAtom = atom<UploadState | null>(null);
+
+/** 送信中かどうか。送信中はボタンを止める。 */
+export const uploadingAtom = atom((get) => {
+  const state = get(uploadStateAtom);
+  return state !== null && !state.done;
+});
+
 /** サイドバーで選択中の月（`YYYY-MM`）。未選択なら最新の月を使う。 */
 export const selectedMonthAtom = atom<string | null>(null);
 
@@ -87,7 +111,35 @@ export const selectAllVisibleAtom = atom(null, (get, set) => {
   set(selectedPathsAtom, next);
 });
 
+/**
+ * 送信結果を一覧に反映する。
+ * 送信のたびに全件を再走査すると数分待たされるので、結果の写真だけを更新する。
+ */
+export const applyUploadResultsAtom = atom(
+  null,
+  (get, set, results: { path: string; sha256: string | null; uploaded: boolean }[]) => {
+    const byPath = new Map(results.map((result) => [result.path, result]));
+    if (byPath.size === 0) return;
+    set(
+      photosAtom,
+      get(photosAtom).map((photo) => {
+        const result = byPath.get(photo.path);
+        if (!result?.uploaded) return photo;
+        return { ...photo, sha256: result.sha256 ?? photo.sha256, uploaded: true };
+      }),
+    );
+  },
+);
+
 /** 選択を全て解除する。 */
 export const clearSelectionAtom = atom(null, (_get, set) => {
   set(selectedPathsAtom, new Set<string>());
+});
+
+/** 指定したパスだけを選択から外す。送信に成功したものを畳むのに使う。 */
+export const deselectPathsAtom = atom(null, (get, set, paths: string[]) => {
+  if (paths.length === 0) return;
+  const next = new Set(get(selectedPathsAtom));
+  for (const path of paths) next.delete(path);
+  set(selectedPathsAtom, next);
 });
