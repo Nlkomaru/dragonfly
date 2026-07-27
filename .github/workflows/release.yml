@@ -13,11 +13,21 @@ name: Release
 #   ドラフトは公開までの足場でしかなく、人手で触る必要はない。
 #
 # latest.json の作り方:
-#   updater のマニフェスト latest.json は3プラットフォーム共通の同名アセットなので、
-#   各ビルドジョブに書かせると後勝ちで内容が失われる。そこでビルド側の生成を止め
-#   （uploadUpdaterJson: false）、全ビルド完了後の updater-manifest ジョブで
-#   添付済みの .sig とバンドル名から1回だけ組み立てる。
-#   これによりビルド3種は並列に走らせられる（以前は直列化していた）。
+#   updater のマニフェスト latest.json は3プラットフォーム共通の同名アセットで、
+#   tauri-action は「既存を読む → 自分の分をマージ → 上げ直す」という更新をする。
+#   競合時は再試行するので多くの場合は揃うが、read-modify-write である以上
+#   同時実行では更新を取りこぼす窓が残る（tauri-action 自身
+#   "it tends to conflict often" とコメントしている）。
+#   そこでビルド側の生成を止め（uploadUpdaterJson: false）、全ビルド完了後の
+#   updater-manifest ジョブで1回だけ組み立てる。書き込みが1回なら競合自体が消える。
+#
+#   もう1つの狙いは「静かに欠けない」こと。従来はどれかのプラットフォームが
+#   失敗しても、残りだけの latest.json がそのまま添付されて公開まで進み得た。
+#   現在は欠けていれば updater-manifest が落ち、publish に進まない。
+#   欠けたマニフェストの公開は更新が静かに止まるので、赤いビルドより被害が大きい。
+#
+#   なお直列化(max-parallel: 1)はこの競合を「起きにくくする」だけで無くせてはおらず、
+#   その対価に約20分を払っていた。並列化して組み立てを1回に寄せる方が速くて確実。
 #
 # 実行の契機:
 #   main へのマージで自動的に走り、そのままリリースまで完了する。
@@ -71,8 +81,8 @@ jobs:
     needs: draft
     name: Build ${{ matrix.platform }}
     strategy:
-      # 各ジョブはドラフトに自分のバンドルと .sig を足すだけで、同名アセットを
-      # 奪い合わない（latest.json は後段の updater-manifest が作る）。
+      # 各ジョブはドラフトに自分のバンドルと .sig を足すだけで、同名アセットの
+      # read-modify-write をしない（latest.json は後段の updater-manifest が作る）。
       # そのため3プラットフォームを並列に走らせて問題ない。
       # fail-fast: false は、1つ失敗しても他の成果物を見て原因を切り分けたいため。
       fail-fast: false
