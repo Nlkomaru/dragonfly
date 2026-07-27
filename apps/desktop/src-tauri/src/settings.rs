@@ -86,6 +86,12 @@ pub fn get_settings(app: AppHandle) -> Result<AppSettings, String> {
 #[tauri::command]
 pub fn set_settings(app: AppHandle, settings: AppSettings) -> Result<AppSettings, String> {
     save_settings(&app, &settings)?;
+    // 保存先が変わった可能性があるので、新しいディレクトリを asset スコープに追加する。
+    // 保存後に呼ぶ必要がある（解決処理がストアを読み直すため）。
+    // ここで失敗しても設定自体は保存済みなので、警告に留めて成功を返す。
+    if let Err(e) = crate::scanner::allow_root_dir_asset_scope(&app) {
+        eprintln!("warning: {e}");
+    }
     Ok(settings)
 }
 

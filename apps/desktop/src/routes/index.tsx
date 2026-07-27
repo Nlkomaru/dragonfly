@@ -1,20 +1,12 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { Settings, Images, RefreshCw } from "lucide-react";
-import {
-  Button,
-  EmptyState,
-  MonthSidebar,
-  PhotoGrid,
-  SelectionActionBar,
-} from "@dragonfly/ui";
+import { Images, RefreshCw } from "lucide-react";
+import { Button, EmptyState, PhotoGrid, SelectionActionBar } from "@dragonfly/ui";
 import {
   activeMonthAtom,
   clearSelectionAtom,
-  monthBucketsAtom,
   scanningAtom,
   selectRangeAtom,
-  selectedMonthAtom,
   selectedPathsAtom,
   selectedPhotosAtom,
   skippedCountAtom,
@@ -30,9 +22,7 @@ export const Route = createFileRoute("/")({
 
 function Index() {
   const { scan, upload } = usePhotoLibrary();
-  const buckets = useAtomValue(monthBucketsAtom);
   const activeMonth = useAtomValue(activeMonthAtom);
-  const setSelectedMonth = useSetAtom(selectedMonthAtom);
   const visiblePhotos = useAtomValue(visiblePhotosAtom);
   const selectedPhotos = useAtomValue(selectedPhotosAtom);
   const [selectedPaths] = useAtom(selectedPathsAtom);
@@ -45,20 +35,9 @@ function Index() {
   const thumbnailSrcFor = useThumbnails(visiblePhotos.map((photo) => photo.path));
 
   return (
-    <div className="flex h-screen">
-      {/* 左サイドバー: VRChat が月フォルダで保存するので、月が一覧の単位になる。 */}
-      <MonthSidebar
-        buckets={buckets}
-        activeMonth={activeMonth}
-        onSelectMonth={setSelectedMonth}
-        footer={
-          <Link to="/settings" className="flex items-center gap-2 text-sm">
-            <Settings className="size-4" />
-            設定
-          </Link>
-        }
-      />
-
+    // サイドバーは root にあるので、この画面は右側の中身だけを描く。
+    // 操作バーを重ねるため relative にし、min-h-0 の連鎖も root から途切れさせない。
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {/* PhotoGrid は自身の高さを測って行を間引くため、高さの決まった親が要る。 */}
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b px-4 py-2">
@@ -95,7 +74,9 @@ function Index() {
       </main>
 
       {/* 選択は月をまたいで保持されるため、内訳を出して誤送信を防ぐ。 */}
+      {/* 設定画面では出したくないので、この画面の中に置いて下部に浮かせる。 */}
       <SelectionActionBar
+        className="absolute bottom-4 left-1/2 -translate-x-1/2"
         selectedPhotos={selectedPhotos}
         onClear={clearSelection}
         actions={<Button onClick={() => void upload()}>アップロード</Button>}

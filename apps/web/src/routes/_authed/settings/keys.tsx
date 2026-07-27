@@ -8,9 +8,9 @@
 
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
-import { authClient, signInWithDiscord, useSession } from "../../lib/authClient";
+import { authClient, useSession } from "../../../lib/authClient";
 
-export const Route = createFileRoute("/settings/keys")({
+export const Route = createFileRoute("/_authed/settings/keys")({
   component: KeysPage,
 });
 
@@ -33,7 +33,10 @@ function formatTime(value: Date | string | null): string {
 }
 
 function KeysPage() {
-  const { data: session, isPending } = useSession();
+  // 表示名は SSR 時に _authed の beforeLoad で解決済みのものを使う（読み込み中の表示を挟まないため）。
+  const { user } = Route.useRouteContext();
+  // 鍵の操作は better-auth のクライアント経由なので、セッションが張れたことを待ってから一覧を取る。
+  const { data: session } = useSession();
   const [keys, setKeys] = useState<KeyRow[]>([]);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -88,35 +91,12 @@ function KeysPage() {
     }
   }
 
-  if (isPending) {
-    return <main className="mx-auto max-w-3xl p-8 text-sm text-muted-foreground">読み込み中…</main>;
-  }
-
-  // 未ログインなら鍵は一切見せない。以前は暫定ユーザーに対して誰でも発行できてしまっていた。
-  if (!session) {
-    return (
-      <main className="mx-auto flex max-w-3xl flex-col items-start gap-4 p-8">
-        <h1 className="text-2xl font-bold">API キー</h1>
-        <p className="text-sm text-muted-foreground">
-          鍵を管理するには Discord でログインしてください。
-        </p>
-        <button
-          type="button"
-          className="rounded bg-primary px-4 py-2 text-sm text-primary-foreground"
-          onClick={() => void signInWithDiscord()}
-        >
-          Discord でログイン
-        </button>
-      </main>
-    );
-  }
-
   return (
     <main className="mx-auto flex max-w-3xl flex-col gap-6 p-8">
       <header className="flex flex-col gap-1">
         <h1 className="text-2xl font-bold">API キー</h1>
         <p className="text-sm text-muted-foreground">
-          デスクトップアプリからの送信に使う鍵を管理します（{session.user.name} としてログイン中）。
+          デスクトップアプリからの送信に使う鍵を管理します（{user.name} としてログイン中）。
         </p>
       </header>
 

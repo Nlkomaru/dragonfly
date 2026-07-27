@@ -26,6 +26,14 @@ pub fn run() {
         .plugin(tauri_plugin_process::init());
 
     builder
+        .setup(|app| {
+            // 起動時点の保存先を asset プロトコルのスコープに入れておく。
+            // 保存先が未作成でも起動は妨げないので、失敗しても警告だけにする。
+            if let Err(e) = scanner::allow_root_dir_asset_scope(app.handle()) {
+                eprintln!("warning: {e}");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             settings::get_settings,
             settings::set_settings,

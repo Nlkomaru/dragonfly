@@ -14,6 +14,7 @@ import { apiKey } from "@better-auth/api-key";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError } from "better-auth/api";
+import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { createDb } from "../db/client";
 import * as schema from "../db/schema";
 import { isDiscordUserAllowed } from "./allowlist";
@@ -104,6 +105,12 @@ export function createAuth(env: Env) {
     },
 
     plugins: [
+      // サーバー関数から auth.api を呼んだときに Set-Cookie を
+      // TanStack Start のレスポンスへ転送する。
+      // /api/auth/* は Hono が auth.handler() の応答をそのまま返すので今は無くても動くが、
+      // 将来サーバー関数側で Cookie を書く操作を足したときに黙って壊れるのを防ぐ。
+      // better-auth の TanStack Start 連携ドキュメントが推奨する構成でもある。
+      tanstackStartCookies(),
       apiKey({
         // 生成される鍵は dfly_ + 64 文字。見分けるための接頭辞で、検証には使わない。
         defaultPrefix: API_KEY_PREFIX,

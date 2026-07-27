@@ -1,6 +1,6 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, FolderOpen, Eye, EyeOff } from "lucide-react";
+import { FolderOpen, Eye, EyeOff } from "lucide-react";
 import { Button, Input, Label } from "@dragonfly/ui";
 import { call } from "@dragonfly/api-client";
 import { DEFAULT_SETTINGS, type AppSettings, type MeResponse } from "@dragonfly/core";
@@ -59,80 +59,77 @@ function SettingsPage() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-2xl space-y-8 p-8">
-      <div className="flex items-center gap-2">
-        <Link to="/" className="flex items-center gap-1 text-sm text-muted-foreground">
-          <ArrowLeft className="size-4" />
-          戻る
-        </Link>
+    // root が高さを固定しているため、この画面自身がスクロール領域になる。
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto max-w-2xl space-y-8 p-8">
         <h1 className="text-xl font-semibold">設定</h1>
+
+        <section className="space-y-2">
+          <Label>スクリーンショットの保存先</Label>
+          <div className="flex gap-2">
+            <Input
+              value={settings.screenshotDir}
+              placeholder="未設定（Pictures/VRChat を使用）"
+              onChange={(event) => void save({ ...settings, screenshotDir: event.target.value })}
+            />
+            <Button variant="outline" onClick={() => void pickDir()}>
+              <FolderOpen className="size-4" />
+              選択
+            </Button>
+          </div>
+        </section>
+
+        <section className="space-y-2">
+          <Label>API キー</Label>
+          <p className="text-sm text-muted-foreground">
+            Web の設定画面で発行した `dfly_` から始まるキーを貼り付けてください。 キーは OS
+            のキーチェーンに保存され、この画面には二度と表示されません。
+          </p>
+          <div className="flex gap-2">
+            <Input
+              type={revealKey ? "text" : "password"}
+              value={apiKeyInput}
+              placeholder={hasApiKey ? "保存済み（上書きするには入力）" : "dfly_..."}
+              onChange={(event) => setApiKeyInput(event.target.value)}
+            />
+            <Button variant="ghost" size="icon" onClick={() => setRevealKey((prev) => !prev)}>
+              {revealKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+            </Button>
+            <Button onClick={() => void saveApiKey()} disabled={apiKeyInput.length === 0}>
+              保存
+            </Button>
+          </div>
+        </section>
+
+        <section className="space-y-2">
+          <Label>接続先</Label>
+          <Input
+            value={settings.apiBaseUrl}
+            onChange={(event) => void save({ ...settings, apiBaseUrl: event.target.value })}
+          />
+          <div className="flex items-center gap-3">
+            <Button
+              variant="outline"
+              onClick={() => void testConnection()}
+              disabled={connection.status === "testing"}
+            >
+              接続テスト
+            </Button>
+            <ConnectionMessage state={connection} />
+          </div>
+        </section>
+
+        <section className="space-y-2">
+          <Label>AVIF の品質（{settings.avifQuality}）</Label>
+          <Input
+            type="range"
+            min={20}
+            max={90}
+            value={settings.avifQuality}
+            onChange={(event) => void save({ ...settings, avifQuality: Number(event.target.value) })}
+          />
+        </section>
       </div>
-
-      <section className="space-y-2">
-        <Label>スクリーンショットの保存先</Label>
-        <div className="flex gap-2">
-          <Input
-            value={settings.screenshotDir}
-            placeholder="未設定（Pictures/VRChat を使用）"
-            onChange={(event) => void save({ ...settings, screenshotDir: event.target.value })}
-          />
-          <Button variant="outline" onClick={() => void pickDir()}>
-            <FolderOpen className="size-4" />
-            選択
-          </Button>
-        </div>
-      </section>
-
-      <section className="space-y-2">
-        <Label>API キー</Label>
-        <p className="text-sm text-muted-foreground">
-          Web の設定画面で発行した `dfly_` から始まるキーを貼り付けてください。
-          キーは OS のキーチェーンに保存され、この画面には二度と表示されません。
-        </p>
-        <div className="flex gap-2">
-          <Input
-            type={revealKey ? "text" : "password"}
-            value={apiKeyInput}
-            placeholder={hasApiKey ? "保存済み（上書きするには入力）" : "dfly_..."}
-            onChange={(event) => setApiKeyInput(event.target.value)}
-          />
-          <Button variant="ghost" size="icon" onClick={() => setRevealKey((prev) => !prev)}>
-            {revealKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-          </Button>
-          <Button onClick={() => void saveApiKey()} disabled={apiKeyInput.length === 0}>
-            保存
-          </Button>
-        </div>
-      </section>
-
-      <section className="space-y-2">
-        <Label>接続先</Label>
-        <Input
-          value={settings.apiBaseUrl}
-          onChange={(event) => void save({ ...settings, apiBaseUrl: event.target.value })}
-        />
-        <div className="flex items-center gap-3">
-          <Button
-            variant="outline"
-            onClick={() => void testConnection()}
-            disabled={connection.status === "testing"}
-          >
-            接続テスト
-          </Button>
-          <ConnectionMessage state={connection} />
-        </div>
-      </section>
-
-      <section className="space-y-2">
-        <Label>AVIF の品質（{settings.avifQuality}）</Label>
-        <Input
-          type="range"
-          min={20}
-          max={90}
-          value={settings.avifQuality}
-          onChange={(event) => void save({ ...settings, avifQuality: Number(event.target.value) })}
-        />
-      </section>
     </div>
   );
 }

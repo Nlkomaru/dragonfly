@@ -171,6 +171,27 @@ pub fn resolve_root_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(pictures.join("VRChat"))
 }
 
+/// 現在の保存先を asset プロトコルのスコープに追加する。
+///
+/// 保存先は設定でユーザーが自由に変えられ、Windows では任意のドライブの
+/// 任意パスになりうる。`tauri.conf.json` の静的な glob だけでは網羅できないため、
+/// 実行時に解決したディレクトリだけを都度許可する（全体開放はしない）。
+/// 起動時と設定更新後に呼ぶこと。
+pub fn allow_root_dir_asset_scope(app: &AppHandle) -> Result<(), String> {
+    let root = resolve_root_dir(app)?;
+    // canonicalize すると Windows で `\\?\C:\...` になり、
+    // WebView から来る `C:\...` 形式のパスと一致しなくなるのでそのまま渡す。
+    app.asset_protocol_scope()
+        // サブフォルダ（`YYYY-MM` など）配下も読めるよう再帰的に許可する。
+        .allow_directory(&root, true)
+        .map_err(|e| {
+            format!(
+                "could not allow the asset scope for {}: {e}",
+                root.display()
+            )
+        })
+}
+
 /// 1ファイルを [`Photo`] に変換する。メタデータが無ければ None。
 fn build_photo(path: &Path) -> Option<Photo> {
     let file_meta = std::fs::metadata(path).ok()?;
@@ -284,6 +305,11 @@ pub fn scan_directory(root: &Path, emit: impl Fn(ScanProgress) + Sync + Send) ->
 #[tauri::command]
 pub async fn scan_photos(app: AppHandle) -> Result<ScanResult, String> {
     let root = resolve_root_dir(&app)?;
+    // ここで返すパスがそのまま <img> の src になるため、走査のたびに
+    // asset スコープを合わせておく（設定の書かれ方によらず取りこぼさない）。
+    if let Err(e) = allow_root_dir_asset_scope(&app) {
+        eprintln!("warning: {e}");
+    }
     if !root.is_dir() {
         return Err(format!(
             "screenshot directory was not found: {}",
