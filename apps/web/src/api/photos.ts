@@ -15,6 +15,9 @@ import {
   ErrorResponseSchema,
   ListPhotosQuerySchema,
   ListPhotosResponseSchema,
+  ListTagsResponseSchema,
+  PutPhotoTagsRequestSchema,
+  PutPhotoTagsResponseSchema,
   UploadPhotoMetadataSchema,
   UploadPhotoResponseSchema,
   UserParamSchema,
@@ -28,7 +31,9 @@ import {
   getPhoto,
   insertPhoto,
   listPhotos,
+  listTags,
   photoKeys,
+  setPhotoTags,
 } from "../server/photos";
 import { PhotoObjectNotFound, streamPhotoObject } from "../server/r2";
 
@@ -312,6 +317,63 @@ photosRouter.delete(
       c.get("photos").delete(keys.thumbKey ? [keys.r2Key, keys.thumbKey] : [keys.r2Key]),
     );
     return c.body(null, 204);
+  },
+);
+
+photosRouter.put(
+  "/users/:id/photos/:photoId/tags",
+  describeRoute({
+    tags: ["photos"],
+    summary: "写真のタグを置き換える",
+    description:
+      "送られたタグの集合にまるごと差し替える。ここに無いタグはこの写真から外れる。" +
+      "タグ自体（名前）はユーザーの語彙として残す。",
+    responses: {
+      200: {
+        description: "反映後のタグ",
+        content: { "application/json": { schema: resolver(PutPhotoTagsResponseSchema) } },
+      },
+      400: {
+        description: "タグの形式が不正、または個数が上限を超えている",
+        content: { "application/json": { schema: resolver(ErrorResponseSchema) } },
+      },
+      ...notFoundResponse,
+      ...commonErrorResponses,
+    },
+  }),
+  validator("param", UserPhotoParamSchema),
+  validator("json", PutPhotoTagsRequestSchema),
+  async (c) => {
+    const { tags } = c.req.valid("json");
+    const updated = await setPhotoTags(
+      c.get("db"),
+      c.get("ownerId"),
+      c.req.param("photoId"),
+      tags,
+    );
+    // 他人の写真 ID を指された場合もここに来る。存在の有無を漏らさないため 404 で揃える。
+    if (!updated) throw new HTTPException(404, { message: "photo not found" });
+    return c.json({ tags: updated });
+  },
+);
+
+photosRouter.get(
+  "/users/:id/tags",
+  describeRoute({
+    tags: ["photos"],
+    summary: "使ったことのあるタグの一覧",
+    description: "タグ入力の補完に使う。写真から外したタグも語彙として残る。",
+    responses: {
+      200: {
+        description: "タグ名の一覧",
+        content: { "application/json": { schema: resolver(ListTagsResponseSchema) } },
+      },
+      ...commonErrorResponses,
+    },
+  }),
+  validator("param", UserParamSchema),
+  async (c) => {
+    return c.json({ tags: await listTags(c.get("db"), c.get("ownerId")) });
   },
 );
 

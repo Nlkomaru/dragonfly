@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
 import type { Photo } from "@dragonfly/core";
-import { Clock, Globe, Tag, Users } from "lucide-react";
+import { Clock, Globe, Maximize2, Tag, Users } from "lucide-react";
 
 import { cn } from "../lib/utils";
+import { TagEditor } from "./TagEditor";
 import { Badge } from "./ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 import { Separator } from "./ui/separator";
@@ -16,6 +17,17 @@ export interface PhotoDetailDialogProps {
   imageSrc?: string;
   /** Web ギャラリーで付けたタグ。ローカル側では空配列でよい。 */
   tags?: string[];
+  /**
+   * タグの変更を受け取る。渡したときだけ編集 UI になる。
+   * 保存はこのコンポーネントでは行わず、呼び出し側に委ねる。
+   */
+  onTagsChange?: (next: string[]) => void;
+  /** 入力補完に出すタグ候補。 */
+  tagSuggestions?: string[];
+  /** タグを保存中かどうか。 */
+  tagsPending?: boolean;
+  /** 画像を前面いっぱいに出す要求。渡さなければ拡大ボタンを出さない。 */
+  onPreview?: () => void;
   className?: string;
 }
 
@@ -57,6 +69,10 @@ export function PhotoDetailDialog({
   onOpenChange,
   imageSrc,
   tags = [],
+  onTagsChange,
+  tagSuggestions = [],
+  tagsPending = false,
+  onPreview,
   className,
 }: PhotoDetailDialogProps) {
   // ワールド名が空文字の写真でもタイトルが空にならないようにする。
@@ -71,16 +87,34 @@ export function PhotoDetailDialog({
       <DialogContent className={cn("max-w-3xl gap-0 p-0 sm:max-w-3xl", className)}>
         {photo ? (
           <>
-            <div className="flex items-center justify-center bg-black">
+            <div className="relative flex items-center justify-center bg-black">
               {imageSrc ? (
                 <img
                   src={imageSrc}
                   alt={worldName}
-                  className="max-h-[60vh] w-full object-contain"
+                  // 拡大できるときは、画像そのものを押しても前面表示に入れる。
+                  onClick={onPreview}
+                  className={cn(
+                    "max-h-[60vh] w-full object-contain",
+                    onPreview && "cursor-zoom-in",
+                  )}
                 />
               ) : (
                 <div className="flex h-64 w-full animate-pulse items-center justify-center bg-muted" />
               )}
+
+              {/* 画像クリックだけだと拡大できると分からないので、ボタンも添える。 */}
+              {onPreview ? (
+                <button
+                  type="button"
+                  aria-label="拡大表示"
+                  title="拡大表示"
+                  onClick={onPreview}
+                  className="absolute right-2 bottom-2 rounded-full bg-black/55 p-2 text-white/90 backdrop-blur-sm hover:bg-black/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                >
+                  <Maximize2 className="size-4" aria-hidden />
+                </button>
+              ) : null}
             </div>
 
             <div className="flex flex-col gap-4 p-6">
@@ -120,7 +154,18 @@ export function PhotoDetailDialog({
                 </div>
               </DetailRow>
 
-              {tags.length > 0 ? (
+              {/* 編集できるときは、まだ 1 つも無くても入力欄を出す（付ける導線が要るため）。 */}
+              {onTagsChange ? (
+                <DetailRow icon={<Tag />} label="タグ">
+                  <TagEditor
+                    value={tags}
+                    onChange={onTagsChange}
+                    suggestions={tagSuggestions}
+                    pending={tagsPending}
+                    className="pt-1"
+                  />
+                </DetailRow>
+              ) : tags.length > 0 ? (
                 <DetailRow icon={<Tag />} label="タグ">
                   <div className="flex flex-wrap gap-1">
                     {tags.map((tag) => (

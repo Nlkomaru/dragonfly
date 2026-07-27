@@ -3,7 +3,13 @@
 // /api/v1/users/me/photos を credentials: "include" で取る。
 // 画像 URL は署名付き相対パス（issue #10）をそのまま <img src> に渡す。
 
-import type { ApiPhoto, ListPhotosResponse, Photo } from "@dragonfly/core";
+import type {
+  ApiPhoto,
+  ListPhotosResponse,
+  ListTagsResponse,
+  Photo,
+  PutPhotoTagsResponse,
+} from "@dragonfly/core";
 import {
   Button,
   EmptyState,
@@ -11,6 +17,7 @@ import {
   Label,
   PhotoDetailDialog,
   PhotoGrid,
+  PhotoLightbox,
 } from "@dragonfly/ui";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
@@ -131,6 +138,13 @@ function GalleryPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   // 詳細 URL の photo がまだ一覧に無いときの単体取得結果。
   const [detailExtra, setDetailExtra] = useState<ApiPhoto | null>(null);
+  // 拡大表示中の写真。共有したいのは詳細（?photo=）のほうなので、これは URL に載せない。
+  const [previewPhoto, setPreviewPhoto] = useState<Photo | null>(null);
+  // タグ入力の候補。初回に一度だけ取り、保存のたびに増分を足す。
+  const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
+  // タグを保存中の写真 ID。保存中は入力を止める。
+  const [savingTagsFor, setSavingTagsFor] = useState<string | null>(null);
+  const [tagError, setTagError] = useState<string | null>(null);
 
   // フィルタ入力の下書き。Apply で URL に反映する。
   const [draftWorld, setDraftWorld] = useState(search.world ?? "");
@@ -222,6 +236,56 @@ function GalleryPage() {
     [detailApi],
   );
 
+  // タグ候補は一覧とは独立に一度だけ取る。失敗しても補完が効かないだけなので黙って諦める。
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/v1/users/me/tags", { credentials: "include" });
+        if (!res.ok) return;
+        const body = (await res.json()) as ListTagsResponse;
+        if (!cancelled) setTagSuggestions(body.tags);
+      } catch {
+        // 補完なしで続行する。
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** 詳細ダイアログのタグを保存する。成功したら手元の一覧にも反映する。 */
+  const saveTags = useCallback(
+    async (photoId: string, next: string[]) => {
+      setSavingTagsFor(photoId);
+      setTagError(null);
+      try {
+        const res = await fetch(`/api/v1/users/me/photos/${encodeURIComponent(photoId)}/tags`, {
+          method: "PUT",
+          credentials: "include",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ tags: next }),
+        });
+        if (!res.ok) throw new Error(`タグを保存できませんでした (${res.status})`);
+        const body = (await res.json()) as PutPhotoTagsResponse;
+
+        // loader は staleTime 中に再実行されないので、手元の一覧を直接書き換える。
+        // tagsById はここから導出しているため、これだけで表示が揃う。
+        setApiPhotos((prev) =>
+          prev.map((photo) => (photo.id === photoId ? { ...photo, tags: body.tags } : photo)),
+        );
+        setDetailExtra((prev) => (prev && prev.id === photoId ? { ...prev, tags: body.tags } : prev));
+        // 新しく作られたタグを候補にも足す。
+        setTagSuggestions((prev) => [...new Set([...prev, ...body.tags])].sort());
+      } catch (error) {
+        setTagError(error instanceof Error ? error.message : "タグを保存できませんでした");
+      } finally {
+        setSavingTagsFor(null);
+      }
+    },
+    [],
+  );
+
   const loadingMoreRef = useRef(false);
 
   const loadMore = useCallback(async () => {
@@ -273,6 +337,10 @@ function GalleryPage() {
     },
     [navigate],
   );
+
+  const openPreview = useCallback((photo: Photo) => {
+    setPreviewPhoto(photo);
+  }, []);
 
   const closeDetail = useCallback(
     (open: boolean) => {
@@ -427,7 +495,8 @@ function GalleryPage() {
             className="min-h-0 flex-1 p-3"
             photos={photos}
             selectable={false}
-            onOpen={openDetail}
+            onInfo={openDetail}
+            onPreview={openPreview}
             thumbnailSrcFor={(photo) => thumbById.get(photo.path)}
             onNearEnd={nextCursor ? handleNearEnd : undefined}
           />
@@ -440,7 +509,29 @@ function GalleryPage() {
         onOpenChange={closeDetail}
         imageSrc={search.photo ? urlById.get(search.photo) : undefined}
         tags={search.photo ? (tagsById.get(search.photo) ?? []) : []}
+        tagSuggestions={tagSuggestions}
+        tagsPending={savingTagsFor !== null && savingTagsFor === search.photo}
+        onTagsChange={
+          search.photo ? (next) => void saveTags(search.photo as string, next) : undefined
+        }
+        onPreview={detailPhoto ? () => openPreview(detailPhoto) : undefined}
       />
+
+      {/* 拡大表示。詳細の上に重ねて開くので、閉じると詳細に戻る。 */}
+      <PhotoLightbox
+        photo={previewPhoto}
+        open={previewPhoto !== null}
+        onOpenChange={(open) => {
+          if (!open) setPreviewPhoto(null);
+        }}
+        imageSrc={previewPhoto ? urlById.get(previewPhoto.path) : undefined}
+      />
+
+      {tagError ? (
+        <p className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-md bg-destructive px-3 py-1.5 text-sm text-destructive-foreground shadow">
+          {tagError}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -100,12 +100,43 @@ describe("documentation", () => {
       "/api/v1/users/{id}/photos/check",
       "/api/v1/users/{id}/photos/{photoId}",
       "/api/v1/users/{id}/photos/{photoId}/image",
+      "/api/v1/users/{id}/photos/{photoId}/tags",
       "/api/v1/users/{id}/photos/{photoId}/thumb",
+      "/api/v1/users/{id}/tags",
     ]);
   });
 
   it("serves the scalar reference", async () => {
     expect((await handler.request("/api/scalar")).status).toBe(200);
+  });
+});
+
+describe("tags", () => {
+  /** タグの検証はハンドラの手前（zod）で落ちるので、DB に触らずに確かめられる。 */
+  const putTags = (body: unknown) =>
+    handler.request(
+      "/api/v1/users/me/photos/photo-1/tags",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      bindings,
+    );
+
+  it("rejects a blank tag, which would otherwise take a row of its own", async () => {
+    currentSession.value = { user: { id: "user-1", name: "nikomaru" } };
+    expect((await putTags({ tags: ["  "] })).status).toBe(400);
+  });
+
+  it("rejects more tags than a photo may carry", async () => {
+    currentSession.value = { user: { id: "user-1", name: "nikomaru" } };
+    const tooMany = Array.from({ length: 33 }, (_, i) => `tag-${i}`);
+    expect((await putTags({ tags: tooMany })).status).toBe(400);
+  });
+
+  it("requires a session", async () => {
+    expect((await putTags({ tags: ["a"] })).status).toBe(401);
   });
 });
 

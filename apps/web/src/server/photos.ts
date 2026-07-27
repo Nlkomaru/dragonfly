@@ -368,6 +368,65 @@ export async function getPhoto(
   );
 }
 
+/**
+ * 写真 1 枚のタグを、渡された配列でまるごと置き換える。
+ * 差分を取らず全消し・全入れにしているのは、タグが数個しかない前提で、
+ * 差分計算を持ち込むより「送った通りになる」ほうが扱いを間違えにくいため。
+ *
+ * 戻り値は反映後のタグ。写真が存在しない（他人のものを含む）なら null。
+ */
+export async function setPhotoTags(
+  db: DrizzleDb,
+  ownerId: string,
+  photoId: string,
+  tagNames: string[],
+): Promise<string[] | null> {
+  // 所有者の写真であることを先に確かめる。ここを飛ばすと、
+  // 認証さえ通れば他人の写真 ID にタグを付けられてしまう。
+  const owned = await db
+    .select({ id: photos.id })
+    .from(photos)
+    .where(and(eq(photos.id, photoId), eq(photos.ownerId, ownerId)))
+    .limit(1);
+  if (!owned[0]) return null;
+
+  const statements: BatchItem<"sqlite">[] = [
+    db.delete(photoTags).where(eq(photoTags.photoId, photoId)),
+  ];
+
+  for (const tag of tagNames) {
+    // insertPhoto と同じ書き方。batch の中では insert の結果を読み戻せないので、
+    // 「入れる」→「名前で引いて紐づける」の 2 文に分ける。
+    statements.push(
+      db.insert(tags).values({ id: uuidv7(), ownerId, name: tag }).onConflictDoNothing(),
+      db
+        .insert(photoTags)
+        .values({
+          photoId,
+          tagId: sql`(SELECT id FROM tags WHERE owner_id = ${ownerId} AND name = ${tag})`,
+        })
+        .onConflictDoNothing(),
+    );
+  }
+
+  await db.batch(statements as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
+  return tagNames;
+}
+
+/**
+ * そのユーザーが使ったことのあるタグ名を全部返す。入力補完に使う。
+ * 写真から外れて誰にも使われていないタグも残るが、
+ * それはユーザー自身の語彙なので候補として出したままにする。
+ */
+export async function listTags(db: DrizzleDb, ownerId: string): Promise<string[]> {
+  const rows = await db
+    .select({ name: tags.name })
+    .from(tags)
+    .where(eq(tags.ownerId, ownerId))
+    .orderBy(tags.name);
+  return rows.map((row) => row.name);
+}
+
 /** R2 のキーだけを引く。所有者条件込みなので、画像配信の権限チェックを兼ねる。 */
 export async function findPhotoKeys(
   db: DrizzleDb,

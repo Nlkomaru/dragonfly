@@ -10,7 +10,10 @@ import type {
   CheckPhotosRequest,
   CheckPhotosResponse,
   ListPhotosResponse,
+  ListTagsResponse,
   MeResponse,
+  PutPhotoTagsRequest,
+  PutPhotoTagsResponse,
   UploadPhotoMetadata,
   UploadPhotoResponse,
 } from "@dragonfly/core";
@@ -62,6 +65,33 @@ export const UploadPhotoMetadataSchema = z.object({
   // ワールドと同席者が無い写真は検索できないため受け付けない。
   vrcx: VrcxMetadataSchema,
   tags: z.array(z.string()).optional(),
+});
+
+/** 1つのタグに許す最大文字数。`packages/ui` の TagEditor と同じ値。 */
+export const TAG_MAX_LENGTH = 32;
+/** 1枚に付けられるタグの上限。`packages/ui` の TagEditor と同じ値。 */
+export const TAG_MAX_COUNT = 32;
+
+/**
+ * PUT /photos/:photoId/tags のボディ。
+ * 前後の空白は落とす。空文字を許すと (owner_id, name) の一意制約に
+ * 「名前の無いタグ」が居座ってしまうため、min(1) で弾く。
+ */
+export const PutPhotoTagsRequestSchema = z.object({
+  tags: z
+    .array(z.string().trim().min(1).max(TAG_MAX_LENGTH))
+    .max(TAG_MAX_COUNT)
+    // 同じ名前を 2 度送られても、写真に付くのは 1 つなので入口で畳む。
+    .transform((values) => [...new Set(values)])
+    .meta({ description: "この写真に付けるタグ。ここに無いタグは外れる" }),
+});
+
+export const PutPhotoTagsResponseSchema = z.object({
+  tags: z.array(z.string()).meta({ description: "反映後のタグ" }),
+});
+
+export const ListTagsResponseSchema = z.object({
+  tags: z.array(z.string()).meta({ description: "このユーザーが使ったことのあるタグ名" }),
 });
 
 /** GET /photos のクエリ。数値は文字列から変換し、変換できない値は 400 で弾く。 */
@@ -146,3 +176,6 @@ type _UploadResponse = Assignable<z.infer<typeof UploadPhotoResponseSchema>, Upl
 type _Photo = Assignable<z.infer<typeof ApiPhotoSchema>, ApiPhoto>;
 type _ListResponse = Assignable<z.infer<typeof ListPhotosResponseSchema>, ListPhotosResponse>;
 type _Me = Assignable<z.infer<typeof MeResponseSchema>, MeResponse>;
+type _PutTagsRequest = Assignable<z.infer<typeof PutPhotoTagsRequestSchema>, PutPhotoTagsRequest>;
+type _PutTagsResponse = Assignable<z.infer<typeof PutPhotoTagsResponseSchema>, PutPhotoTagsResponse>;
+type _ListTags = Assignable<z.infer<typeof ListTagsResponseSchema>, ListTagsResponse>;

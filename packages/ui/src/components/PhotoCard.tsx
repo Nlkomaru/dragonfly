@@ -1,6 +1,6 @@
-import type { MouseEvent } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import type { Photo } from "@dragonfly/core";
-import { Check, ImageOff } from "lucide-react";
+import { Check, ImageOff, Info, Maximize2 } from "lucide-react";
 
 import { cn } from "../lib/utils";
 import { Checkbox } from "./ui/checkbox";
@@ -19,40 +19,81 @@ export interface PhotoCardProps {
    * selectable=false のときは呼ばれない。
    */
   onToggle?: (photo: Photo, shiftKey: boolean) => void;
-  /** 詳細ダイアログを開くなど。selectable=false ではカード本体のクリックで呼ばれる。 */
-  onOpen?: (photo: Photo) => void;
+  /** 情報ボタン（右上の ⓘ）。撮影日時やワールドなどの詳細を開く。 */
+  onInfo?: (photo: Photo) => void;
+  /**
+   * 拡大表示の要求。閲覧モードではカード本体のクリック、
+   * 選択モードでは右上の拡大ボタンから呼ばれる。
+   */
+  onPreview?: (photo: Photo) => void;
   /**
    * 選択 UI を出すか。既定は true（デスクトップ互換）。
-   * false にするとチェックボックスと送信済みバッジを隠し、クリックで onOpen する。
+   * false にするとチェックボックスと送信済みバッジを隠し、クリックで拡大表示する。
    */
   selectable?: boolean;
   className?: string;
+}
+
+/** 画像に重ねる小さな丸ボタン。ホバー・フォーカス時だけ現れる。 */
+function OverlayButton({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={(event) => {
+        // カード本体の選択・拡大と二重に反応させない。
+        event.stopPropagation();
+        onClick();
+      }}
+      className={cn(
+        "flex size-6 items-center justify-center rounded-full bg-black/55 text-white shadow-sm backdrop-blur-sm",
+        "opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
+        "hover:bg-black/75 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80",
+        "[&_svg]:size-3.5",
+      )}
+    >
+      {children}
+    </button>
+  );
 }
 
 /**
  * 写真1枚分のカード。正方形にクロップして並べる。
  * 選択チェックボックスとアップロード済みバッジを重ね、
  * ホバー時に下部へワールド名を出す。
+ *
+ * カード本体のクリックは、選択モードでは選択、閲覧モードでは拡大表示に割り当てる。
+ * 詳細（ⓘ）と拡大は右上の小さなボタンに寄せ、選択の邪魔をしないようにする。
  */
 export function PhotoCard({
   photo,
   thumbnailSrc,
   selected = false,
   onToggle,
-  onOpen,
+  onInfo,
+  onPreview,
   selectable = true,
   className,
 }: PhotoCardProps) {
   // ワールド名が空でも aria-label / オーバーレイが破綻しないようにする。
   const worldName = photo.metadata.world.name || "不明なワールド";
 
-  // 選択モードならトグル、閲覧モードなら詳細を開く。
+  // 選択モードならトグル、閲覧モードなら拡大表示を開く。
   const handleActivate = (shiftKey: boolean) => {
     if (selectable) {
       onToggle?.(photo, shiftKey);
       return;
     }
-    onOpen?.(photo);
+    onPreview?.(photo);
   };
 
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
@@ -67,14 +108,15 @@ export function PhotoCard({
       tabIndex={0}
       onClick={handleClick}
       onKeyDown={(event) => {
-        // キーボード操作でも選択 / 詳細を開けるようにする。
+        // キーボード操作でも選択 / 拡大を開けるようにする。
         if (event.key === " " || event.key === "Enter") {
           event.preventDefault();
           handleActivate(event.shiftKey);
         }
       }}
       className={cn(
-        "group relative aspect-square cursor-pointer overflow-hidden rounded-lg border bg-muted transition-all outline-none",
+        "group relative aspect-square overflow-hidden rounded-lg border bg-muted transition-all outline-none",
+        selectable ? "cursor-pointer" : "cursor-zoom-in",
         "focus-visible:ring-ring/50 focus-visible:ring-[3px]",
         selectable && selected
           ? "border-primary ring-2 ring-primary"
@@ -115,16 +157,33 @@ export function PhotoCard({
         </div>
       ) : null}
 
-      {/* 送信済みバッジ。選択 UI があるときだけ出す（Web 閲覧では不要なノイズになる）。 */}
-      {selectable && photo.uploaded ? (
-        <span
-          title="送信済み"
-          className="absolute top-2 right-2 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm"
-        >
-          <Check className="size-3" aria-hidden />
-          <span className="sr-only">送信済み</span>
-        </span>
-      ) : null}
+      {/* 右上は 1 本の並びにまとめる。個別に位置をずらすと、
+          送信済みバッジの有無でボタンが動いてしまうため。 */}
+      <div className="absolute top-2 right-2 flex items-center gap-1">
+        {/* 選択モードでは本体クリックが選択なので、拡大は専用のボタンに逃がす。 */}
+        {selectable && onPreview ? (
+          <OverlayButton label="拡大表示" onClick={() => onPreview(photo)}>
+            <Maximize2 aria-hidden />
+          </OverlayButton>
+        ) : null}
+
+        {onInfo ? (
+          <OverlayButton label="詳細" onClick={() => onInfo(photo)}>
+            <Info aria-hidden />
+          </OverlayButton>
+        ) : null}
+
+        {/* 送信済みバッジ。選択 UI があるときだけ出す（Web 閲覧では不要なノイズになる）。 */}
+        {selectable && photo.uploaded ? (
+          <span
+            title="送信済み"
+            className="flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm"
+          >
+            <Check className="size-3" aria-hidden />
+            <span className="sr-only">送信済み</span>
+          </span>
+        ) : null}
+      </div>
 
       {/* ワールド名はホバー時のみ。常時出すとグリッドが騒がしくなる。 */}
       <div
@@ -135,21 +194,6 @@ export function PhotoCard({
       >
         <p className="truncate text-xs font-medium text-white">{worldName}</p>
       </div>
-
-      {/* 詳細を開く操作は選択と衝突するため、選択モードでのみ別クリック領域に分ける。
-          閲覧モードではカード全体が onOpen になるのでボタンは不要。 */}
-      {selectable && onOpen ? (
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onOpen(photo);
-          }}
-          className="absolute right-2 bottom-2 rounded-md bg-black/50 px-2 py-1 text-[11px] text-white opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none"
-        >
-          詳細
-        </button>
-      ) : null}
     </div>
   );
 }

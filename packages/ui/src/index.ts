@@ -29,5 +29,7 @@ export { MonthSidebar, type MonthSidebarProps } from "./components/MonthSidebar"
 export { PhotoCard, type PhotoCardProps } from "./components/PhotoCard";
 export { PhotoDetailDialog, type PhotoDetailDialogProps } from "./components/PhotoDetailDialog";
 export { PhotoGrid, type PhotoGridProps } from "./components/PhotoGrid";
+export { PhotoLightbox, type PhotoLightboxProps } from "./components/PhotoLightbox";
+export { TagEditor, type TagEditorProps } from "./components/TagEditor";
 export { SelectionActionBar, type SelectionActionBarProps } from "./components/SelectionActionBar";
 export { UploadProgressBar, type UploadProgressBarProps } from "./components/UploadProgressBar";

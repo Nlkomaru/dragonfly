@@ -34,10 +34,13 @@ export interface PhotoGridProps {
    * （全件を先に作っても待ち時間が前倒しになるだけなので）。
    */
   onVisiblePhotosChange?: (photos: Photo[]) => void;
-  onOpen?: (photo: Photo) => void;
+  /** 情報ボタン（ⓘ）が押されたとき。詳細ダイアログを開くのに使う。 */
+  onInfo?: (photo: Photo) => void;
+  /** 拡大表示の要求。閲覧モードではカードのクリック、選択モードでは拡大ボタンから。 */
+  onPreview?: (photo: Photo) => void;
   /**
    * 選択 UI を出すか。既定 true（デスクトップ互換）。
-   * false ならチェックボックス等を隠し、カードクリックで onOpen する。
+   * false ならチェックボックス等を隠し、カードクリックで拡大表示する。
    */
   selectable?: boolean;
   /**
@@ -60,7 +63,8 @@ export function PhotoGrid({
   onRangeSelect,
   thumbnailSrcFor,
   onVisiblePhotosChange,
-  onOpen,
+  onInfo,
+  onPreview,
   selectable = true,
   onNearEnd,
   className,
@@ -201,7 +205,8 @@ export function PhotoGrid({
                 onToggle={
                   selectable ? (target, shiftKey) => handleToggle(target, index, shiftKey) : undefined
                 }
-                onOpen={onOpen}
+                onInfo={onInfo}
+                onPreview={onPreview}
               />
             );
           })}
