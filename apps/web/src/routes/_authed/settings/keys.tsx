@@ -47,7 +47,10 @@ function KeysPage() {
   const reload = useCallback(async () => {
     const result = await authClient.apiKey.list();
     if (result.error) throw new Error(result.error.message ?? "鍵の一覧を取得できませんでした");
-    setKeys((result.data ?? []) as unknown as KeyRow[]);
+    // list の応答は配列そのものではなく `{ apiKeys, total }` の形。
+    // 直接 data を配列として扱うと keys.map() が "x.map is not a function" で画面ごと落ちる。
+    const rows = (result.data as { apiKeys?: unknown } | null)?.apiKeys;
+    setKeys(Array.isArray(rows) ? (rows as KeyRow[]) : []);
   }, []);
 
   useEffect(() => {
