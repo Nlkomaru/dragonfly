@@ -144,6 +144,8 @@ function GalleryPage() {
   const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
   // タグを保存中の写真 ID。保存中は入力を止める。
   const [savingTagsFor, setSavingTagsFor] = useState<string | null>(null);
+  // 保存中に表示するタグ。往復を待つと、追加したタグが一瞬消えて見えるため先に反映する。
+  const [pendingTags, setPendingTags] = useState<string[] | null>(null);
   const [tagError, setTagError] = useState<string | null>(null);
 
   // フィルタ入力の下書き。Apply で URL に反映する。
@@ -258,6 +260,7 @@ function GalleryPage() {
   const saveTags = useCallback(
     async (photoId: string, next: string[]) => {
       setSavingTagsFor(photoId);
+      setPendingTags(next);
       setTagError(null);
       try {
         const res = await fetch(`/api/v1/users/me/photos/${encodeURIComponent(photoId)}/tags`, {
@@ -281,6 +284,7 @@ function GalleryPage() {
         setTagError(error instanceof Error ? error.message : "タグを保存できませんでした");
       } finally {
         setSavingTagsFor(null);
+        setPendingTags(null);
       }
     },
     [],
@@ -341,6 +345,19 @@ function GalleryPage() {
   const openPreview = useCallback((photo: Photo) => {
     setPreviewPhoto(photo);
   }, []);
+
+  /** 拡大表示のまま前後の写真へ移動する。一覧の並び順をそのまま辿る。 */
+  const stepPreview = useCallback(
+    (delta: number) => {
+      setPreviewPhoto((current) => {
+        if (!current) return current;
+        const index = photos.findIndex((photo) => photo.path === current.path);
+        // 端では止める。巡回させると、どこまで見たのか分からなくなる。
+        return photos[index + delta] ?? current;
+      });
+    },
+    [photos],
+  );
 
   const closeDetail = useCallback(
     (open: boolean) => {
@@ -508,7 +525,7 @@ function GalleryPage() {
         open={Boolean(search.photo)}
         onOpenChange={closeDetail}
         imageSrc={search.photo ? urlById.get(search.photo) : undefined}
-        tags={search.photo ? (tagsById.get(search.photo) ?? []) : []}
+        tags={pendingTags ?? (search.photo ? (tagsById.get(search.photo) ?? []) : [])}
         tagSuggestions={tagSuggestions}
         tagsPending={savingTagsFor !== null && savingTagsFor === search.photo}
         onTagsChange={
@@ -525,6 +542,8 @@ function GalleryPage() {
           if (!open) setPreviewPhoto(null);
         }}
         imageSrc={previewPhoto ? urlById.get(previewPhoto.path) : undefined}
+        onPrev={() => stepPreview(-1)}
+        onNext={() => stepPreview(1)}
       />
 
       {tagError ? (

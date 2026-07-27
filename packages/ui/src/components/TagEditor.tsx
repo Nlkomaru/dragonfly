@@ -83,6 +83,9 @@ export function TagEditor({
                 type="button"
                 aria-label={`${tag} を外す`}
                 disabled={pending}
+                // 入力欄からフォーカスを移さない。移すと onBlur の追加が先に走り、
+                // 同じ value を元にした削除で、書きかけのタグが取り消されてしまう。
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => removeAt(index)}
                 className="rounded-full p-0.5 opacity-70 hover:opacity-100 disabled:opacity-40"
               >
