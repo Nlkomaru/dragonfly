@@ -13,21 +13,19 @@ name: Release
 #   ドラフトは公開までの足場でしかなく、人手で触る必要はない。
 #
 # latest.json の作り方:
-#   updater のマニフェスト latest.json は3プラットフォーム共通の同名アセットで、
-#   tauri-action は「既存を読む → 自分の分をマージ → 上げ直す」という更新をする。
-#   競合時は再試行するので多くの場合は揃うが、read-modify-write である以上
-#   同時実行では更新を取りこぼす窓が残る（tauri-action 自身
-#   "it tends to conflict often" とコメントしている）。
-#   そこでビルド側の生成を止め（uploadUpdaterJson: false）、全ビルド完了後の
-#   updater-manifest ジョブで1回だけ組み立てる。書き込みが1回なら競合自体が消える。
+#   updater のマニフェスト latest.json は3プラットフォーム共通の同名アセットだが、
+#   tauri-action は「既存を読む → 自分の分をマージ → 上げ直す」形で更新するため、
+#   3ジョブが並列に書いても3プラットフォーム分が揃う。生成は tauri-action に任せる。
 #
-#   もう1つの狙いは「静かに欠けない」こと。従来はどれかのプラットフォームが
-#   失敗しても、残りだけの latest.json がそのまま添付されて公開まで進み得た。
-#   現在は欠けていれば updater-manifest が落ち、publish に進まない。
-#   欠けたマニフェストの公開は更新が静かに止まるので、赤いビルドより被害が大きい。
+#   かつては max-parallel: 1 で直列化していた。当時のコメントは「並列だと片方の
+#   書き込みが失われる」と説明していたが、上記のとおりマージされるので誤りだった。
+#   直列化は1リリースあたり約20分を余計に払っていただけなので、単に外した。
 #
-#   なお直列化(max-parallel: 1)はこの競合を「起きにくくする」だけで無くせてはおらず、
-#   その対価に約20分を払っていた。並列化して組み立てを1回に寄せる方が速くて確実。
+#   既知の穴として、マージは read-modify-write なので「読んだ後に他が書いた」
+#   取りこぼしは理論上あり得る。競合として検出されないため再試行も発火せず、
+#   ビルドが全部緑のまま1プラットフォーム欠けた latest.json が出る可能性が残る。
+#   実運用では観測されておらず（姉妹リポジトリ kodou は3並列のまま14リリース）、
+#   検出用の仕組みを持つ対価に見合わないと判断してこの穴は受け入れている。
 #
 # 実行の契機:
 #   main へのマージで自動的に走り、そのままリリースまで完了する。
@@ -81,9 +79,8 @@ jobs:
     needs: draft
     name: Build ${{ matrix.platform }}
     strategy:
-      # 各ジョブはドラフトに自分のバンドルと .sig を足すだけで、同名アセットの
-      # read-modify-write をしない（latest.json は後段の updater-manifest が作る）。
-      # そのため3プラットフォームを並列に走らせて問題ない。
+      # latest.json は tauri-action がマージして更新するため、3プラットフォームを
+      # 並列に走らせても内容が揃う（かつての max-parallel: 1 は不要だった）。
       # fail-fast: false は、1つ失敗しても他の成果物を見て原因を切り分けたいため。
       fail-fast: false
       matrix:
@@ -164,37 +161,19 @@ jobs:
           # 既存のドラフトへアセットを足す。releaseId を渡すと release-drafter が書いた
           # 変更履歴（name / body）を tauri-action が上書きしない。
           releaseId: ${{ needs.draft.outputs.release_id }}
-          # latest.json はここでは作らない。プラットフォームごとに書くと同名アセットを
-          # 上書きし合うため、全ビルド後の updater-manifest ジョブで1回だけ生成する。
-          uploadUpdaterJson: false
-          # 更新バンドルの .sig は各ジョブが添付する必要がある（既定 true だが明示する）。
-          # updater-manifest はこの .sig を読んで署名を埋め込む。
-          uploadUpdaterSignatures: true
+          # bundle.targets が "all" のため Windows は .msi と -setup.exe(NSIS) の
+          # 両方に .sig が出る。tauri-action の既定は MSI を windows-x86_64 に割り当てるが、
+          # 更新には NSIS を使いたいので明示的に切り替える。
+          # NSIS は Tauri が既定の配布形式として推奨しており、更新時のサイレント
+          # インストールが素直に通る（MSI は再起動要求が絡みやすい）。
+          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
-  # 3プラットフォームのアセットが揃ってから、updater のマニフェストを1回だけ組み立てる。
-  # dry_run でもドラフト上で中身を確認したいので、ここは条件を付けない。
-  updater-manifest:
-    needs: [draft, build]
-    name: Assemble latest.json
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Build and attach latest.json
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_ID: ${{ needs.draft.outputs.release_id }}
-          TAG: ${{ needs.draft.outputs.tag }}
-        # 実行ビットの有無に左右されないよう bash 経由で呼ぶ。
-        run: bash .github/scripts/build-updater-manifest.sh
-
   # 全アセットと latest.json が揃ってから公開する。
-  # updater-manifest を needs に含めないとマニフェスト添付前に公開されてしまう。
+  # ビルドが1つでも失敗すれば needs により publish がスキップされ、
+  # 欠けたリリースはドラフトのまま公開されない。
   publish:
-    needs: [draft, build, updater-manifest]
+    needs: [draft, build]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     steps:
