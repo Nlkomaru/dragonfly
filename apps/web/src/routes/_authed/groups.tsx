@@ -40,16 +40,16 @@ const THRESHOLD_STEP = 0.005;
 /** 既定のしきい値。体感でほどよく分かれる値を初期位置にする。 */
 const THRESHOLD_DEFAULT = 0.12;
 
-/** グループ数モードのスライダー範囲。2 未満は分ける意味が無く、50 超は一覧できない。 */
-const COUNT_MIN = 2;
-const COUNT_MAX = 50;
-/** 既定のグループ数。 */
-const COUNT_DEFAULT = 10;
+/** 枚数モードのスライダー範囲。1 グループあたりの枚数として現実的な幅だけを出す。 */
+const SIZE_MIN = 2;
+const SIZE_MAX = 100;
+/** 既定の 1 グループあたりの枚数。 */
+const SIZE_DEFAULT = 10;
 
 /** 「この写真に似た写真」に出す件数。 */
 const NEAREST_LIMIT = 24;
 
-/** グループ分けの方式。threshold は色の近さで繋ぐ従来方式、count はグループ数を固定する方式。 */
+/** グループ分けの方式。threshold は色の近さで繋ぐ従来方式、count は 1 グループの枚数を指定する方式。 */
 export type GroupMode = "threshold" | "count";
 
 /** URL 検索パラメータ。共有・リロードで同じグループ分けを再現する。 */
@@ -58,8 +58,8 @@ export type GroupsSearch = {
   mode?: GroupMode;
   /** union-find のしきい値。小さいほど細かく分かれる。 */
   threshold?: number;
-  /** mode === "count" のときのグループ数。 */
-  count?: number;
+  /** mode === "count" のときの、1 グループあたりのおおよその枚数。 */
+  size?: number;
   /** true なら差し色（彩度の高い色）を重視した距離で比べる。 */
   accent?: boolean;
   /** 「似た写真」の基準にしている写真 ID。 */
@@ -75,10 +75,10 @@ function clampThreshold(value: number): number {
   return Math.min(THRESHOLD_MAX, Math.max(THRESHOLD_MIN, value));
 }
 
-/** グループ数をスライダーの範囲に収める。こちらは個数なので整数に丸める。 */
-function clampCount(value: number): number {
-  if (!Number.isFinite(value)) return COUNT_DEFAULT;
-  return Math.min(COUNT_MAX, Math.max(COUNT_MIN, Math.trunc(value)));
+/** 1 グループの枚数をスライダーの範囲に収める。こちらは枚数なので整数に丸める。 */
+function clampSize(value: number): number {
+  if (!Number.isFinite(value)) return SIZE_DEFAULT;
+  return Math.min(SIZE_MAX, Math.max(SIZE_MIN, Math.trunc(value)));
 }
 
 /** 配列を size 件ずつに割る。PUT の上限（PALETTE_PUT_LIMIT）に合わせるのに使う。 */
@@ -101,12 +101,12 @@ export const Route = createFileRoute("/_authed/groups")({
       }
       return undefined;
     };
-    // count は整数なので threshold とは別のパーサにする（clamp の丸め方が違う）。
-    const asCount = (value: unknown): number | undefined => {
-      if (typeof value === "number") return Number.isFinite(value) ? clampCount(value) : undefined;
+    // size は整数なので threshold とは別のパーサにする（clamp の丸め方が違う）。
+    const asSize = (value: unknown): number | undefined => {
+      if (typeof value === "number") return Number.isFinite(value) ? clampSize(value) : undefined;
       if (typeof value === "string" && value.length > 0) {
         const n = Number(value);
-        if (Number.isFinite(n)) return clampCount(n);
+        if (Number.isFinite(n)) return clampSize(n);
       }
       return undefined;
     };
@@ -114,7 +114,7 @@ export const Route = createFileRoute("/_authed/groups")({
       // 知らない値は既定（threshold 方式）に落とす。URL を手で書き換えられても壊れないように。
       mode: raw.mode === "count" ? "count" : undefined,
       threshold: asThreshold(raw.threshold),
-      count: asCount(raw.count),
+      size: asSize(raw.size),
       // 真のときだけ URL に載せる。それ以外は既定（面積重み）扱い。
       accent: raw.accent === true || raw.accent === "true" ? true : undefined,
       photo: asString(raw.photo),
@@ -156,17 +156,17 @@ function GroupsPage() {
   const committedThreshold = search.threshold ?? THRESHOLD_DEFAULT;
   const [draftThreshold, setDraftThreshold] = useState(committedThreshold);
 
-  // グループ数のスライダーも同じ理屈で、離すまでは手元の値だけ動かす。
-  const committedCount = search.count ?? COUNT_DEFAULT;
-  const [draftCount, setDraftCount] = useState(committedCount);
+  // 枚数のスライダーも同じ理屈で、離すまでは手元の値だけ動かす。
+  const committedSize = search.size ?? SIZE_DEFAULT;
+  const [draftSize, setDraftSize] = useState(committedSize);
 
   // 戻る操作や共有 URL 直開きでも、つまみの位置を URL に揃える。
   useEffect(() => {
     setDraftThreshold(committedThreshold);
   }, [committedThreshold]);
   useEffect(() => {
-    setDraftCount(committedCount);
-  }, [committedCount]);
+    setDraftSize(committedSize);
+  }, [committedSize]);
 
   // 再生成ボタンを押すたびに増える。これを deps にして、パイプラインを頭から回し直す。
   const [runId, setRunId] = useState(0);
@@ -383,13 +383,16 @@ function GroupsPage() {
     if (phase === "ready" && matrixWeightingRef.current !== weighting) setPhase("grouping");
   }, [phase, weighting]);
 
-  // しきい値・グループ数・方式を変えたときはここだけが走る（距離計算はやり直さない）。
+  // しきい値・枚数・方式を変えたときはここだけが走る（距離計算はやり直さない）。
   const groups = useMemo(() => {
     if (!matrix) return [];
+    // 「1 グループの枚数」からグループ数へ換算する。k-medoids のグループは
+    // きっちり等分にはならないので、枚数は「おおよその目安」になる。
+    const count = Math.max(1, Math.ceil(palettes.length / committedSize));
     return mode === "count"
-      ? groupByCount(palettes, matrix, committedCount)
+      ? groupByCount(palettes, matrix, count)
       : groupByThreshold(palettes, matrix, committedThreshold);
-  }, [matrix, palettes, mode, committedThreshold, committedCount]);
+  }, [matrix, palettes, mode, committedThreshold, committedSize]);
 
   // 2 枚以上のグループと、1 枚だけの写真を分ける。後者はまとめて末尾に置く。
   // グループ数固定モードでは「頼んだ数のグループを見たい」のが目的なので、
@@ -437,13 +440,13 @@ function GroupsPage() {
     });
   }, [navigate, draftThreshold]);
 
-  /** つまみを離した時点でグループ数を URL に反映する。 */
-  const commitCount = useCallback(() => {
+  /** つまみを離した時点で枚数を URL に反映する。 */
+  const commitSize = useCallback(() => {
     void navigate({
-      search: (prev) => ({ ...prev, count: draftCount }),
+      search: (prev) => ({ ...prev, size: draftSize }),
       replace: true,
     });
-  }, [navigate, draftCount]);
+  }, [navigate, draftSize]);
 
   /** 差し色重視の重み付けを切り替える。オフのときは URL を汚さないよう undefined にする。 */
   const toggleAccent = useCallback(
@@ -497,9 +500,9 @@ function GroupsPage() {
             variant={mode === "count" ? "secondary" : "ghost"}
             aria-pressed={mode === "count"}
             onClick={() => switchMode("count")}
-            title="指定した数のグループに写真を振り分けます"
+            title="1 グループがおよそ指定した枚数になるようにグループ数を決めて振り分けます"
           >
-            グループ数固定
+            枚数でまとめる
           </Button>
         </div>
 
@@ -524,20 +527,21 @@ function GroupsPage() {
           </label>
         ) : (
           <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-            グループ数
+            1 グループの枚数
             <input
               type="range"
-              min={COUNT_MIN}
-              max={COUNT_MAX}
+              min={SIZE_MIN}
+              max={SIZE_MAX}
               step={1}
-              value={draftCount}
-              onChange={(e) => setDraftCount(Number(e.target.value))}
-              onPointerUp={commitCount}
-              onKeyUp={commitCount}
+              value={draftSize}
+              onChange={(e) => setDraftSize(Number(e.target.value))}
+              onPointerUp={commitSize}
+              onKeyUp={commitSize}
               className="w-48 accent-primary"
               disabled={phase !== "ready"}
             />
-            <span className="tabular-nums">{draftCount}</span>
+            {/* きっちりこの枚数になるわけではないので「約」を付ける。 */}
+            <span className="tabular-nums">約 {draftSize} 枚</span>
           </label>
         )}
 
