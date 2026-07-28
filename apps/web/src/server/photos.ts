@@ -12,7 +12,15 @@ import type {
 import { and, desc, eq, gte, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import type { DrizzleDb } from "../db/client";
-import { photoPlayers, photoTags, photos, tags, vrcUsers, worlds } from "../db/schema";
+import {
+  photoPalettes,
+  photoPlayers,
+  photoTags,
+  photos,
+  tags,
+  vrcUsers,
+  worlds,
+} from "../db/schema";
 import { uuidv7 } from "./ids";
 import { buildSignedPhotoUrl, photoUrlExpiry } from "./signedUrl";
 
@@ -516,8 +524,9 @@ export async function findPhotoKeys(
 }
 
 /**
- * 写真を削除する。photo_players / photo_tags は ON DELETE CASCADE で消えるが、
- * D1 は既定で外部キーが有効でない場合があるため、明示的に同じ batch で消しておく。
+ * 写真を削除する。photo_players / photo_tags / photo_palettes は ON DELETE CASCADE で
+ * 消えるが、D1 は既定で外部キーが有効でない場合があるため、明示的に同じ batch で消しておく。
+ * 特にパレットは owner_id だけで一覧されるので、残ると /groups が実体の無い写真を掴む。
  */
 export async function deletePhoto(
   db: DrizzleDb,
@@ -529,6 +538,7 @@ export async function deletePhoto(
   await db.batch([
     db.delete(photoPlayers).where(eq(photoPlayers.photoId, photoId)),
     db.delete(photoTags).where(eq(photoTags.photoId, photoId)),
+    db.delete(photoPalettes).where(eq(photoPalettes.photoId, photoId)),
     db.delete(photos).where(and(eq(photos.id, photoId), eq(photos.ownerId, ownerId))),
   ]);
   return keys;

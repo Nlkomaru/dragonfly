@@ -97,6 +97,7 @@ describe("documentation", () => {
     expect(Object.keys(spec.paths).sort()).toEqual([
       "/api/v1/me",
       "/api/v1/users/{id}/facets",
+      "/api/v1/users/{id}/palettes",
       "/api/v1/users/{id}/photos",
       "/api/v1/users/{id}/photos/check",
       "/api/v1/users/{id}/photos/{photoId}",
@@ -138,6 +139,51 @@ describe("tags", () => {
 
   it("requires a session", async () => {
     expect((await putTags({ tags: ["a"] })).status).toBe(401);
+  });
+});
+
+describe("palettes", () => {
+  /** タグと同じく、パレットの検証も zod で落ちるので DB に触らずに確かめられる。 */
+  const putPalettes = (body: unknown) =>
+    handler.request(
+      "/api/v1/users/me/palettes",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      bindings,
+    );
+
+  const palette = (photoId: string) => ({
+    photoId,
+    version: 1,
+    swatches: [{ hex: "#3a5f8a", ratio: 1, l: 0.5, a: 0, b: 0 }],
+  });
+
+  it("rejects more palettes than one request may carry", async () => {
+    currentSession.value = { user: { id: "user-1", name: "nikomaru" } };
+    const tooMany = Array.from({ length: 51 }, (_, i) => palette(`photo-${i}`));
+    expect((await putPalettes({ palettes: tooMany })).status).toBe(400);
+  });
+
+  it("rejects an uppercase hex, which would not match what the extractor emits", async () => {
+    currentSession.value = { user: { id: "user-1", name: "nikomaru" } };
+    const invalid = {
+      ...palette("photo-1"),
+      swatches: [{ hex: "#3A5F8A", ratio: 1, l: 0, a: 0, b: 0 }],
+    };
+    expect((await putPalettes({ palettes: [invalid] })).status).toBe(400);
+  });
+
+  it("rejects an oversized photo id, which would bloat the lookup query", async () => {
+    currentSession.value = { user: { id: "user-1", name: "nikomaru" } };
+    expect((await putPalettes({ palettes: [palette("x".repeat(65))] })).status).toBe(400);
+  });
+
+  it("requires a session", async () => {
+    expect((await putPalettes({ palettes: [] })).status).toBe(401);
+    expect((await handler.request("/api/v1/users/me/palettes", {}, bindings)).status).toBe(401);
   });
 });
 

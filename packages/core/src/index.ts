@@ -30,8 +30,27 @@ export type {
   ApiKeySummary,
   CreateApiKeyResponse,
   MeResponse,
+  ApiPhotoPalette,
+  ListPalettesResponse,
+  PutPalettesRequest,
+  PutPalettesResponse,
 } from "./api";
-export { CHECK_HASH_LIMIT } from "./api";
+export { CHECK_HASH_LIMIT, PALETTE_PUT_LIMIT } from "./api";
+
+export type { PaletteSwatch, PhotoPalette, DistanceMatrix } from "./palette";
+export {
+  PALETTE_VERSION,
+  PALETTE_SIZE,
+  srgbToOklab,
+  oklabToHex,
+  extractPalette,
+  paletteDistance,
+  buildDistanceMatrix,
+  buildDistanceMatrixFlat,
+  reshapeDistanceMatrix,
+  groupByThreshold,
+  nearestPhotos,
+} from "./palette";
 
 export type { AppSettings } from "./settings";
 export { DEFAULT_SETTINGS } from "./settings";

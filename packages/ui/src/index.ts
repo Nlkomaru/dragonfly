@@ -46,6 +46,7 @@ export {
   type FilterComboboxProps,
 } from "./components/FilterCombobox";
 export { MonthSidebar, type MonthSidebarProps } from "./components/MonthSidebar";
+export { PaletteSwatches, type PaletteSwatchesProps } from "./components/PaletteSwatches";
 export { PhotoCard, type PhotoCardProps } from "./components/PhotoCard";
 export { PhotoDetailDialog, type PhotoDetailDialogProps } from "./components/PhotoDetailDialog";
 export { PhotoGrid, type PhotoGridProps } from "./components/PhotoGrid";

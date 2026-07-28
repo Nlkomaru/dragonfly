@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    // 型のみの import を必ず `import type` で書かせる。apps/web と揃える。
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src"]
+}
