@@ -37,7 +37,7 @@ export type {
 } from "./api";
 export { CHECK_HASH_LIMIT, PALETTE_PUT_LIMIT } from "./api";
 
-export type { PaletteSwatch, PhotoPalette, DistanceMatrix } from "./palette";
+export type { PaletteSwatch, PhotoPalette, DistanceMatrix, PaletteWeighting } from "./palette";
 export {
   PALETTE_VERSION,
   PALETTE_SIZE,

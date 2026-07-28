@@ -176,6 +176,58 @@ describe("paletteDistance", () => {
   });
 });
 
+describe("accent weighting", () => {
+  /** ほぼ黒 (9 割) + 差し色 (1 割) の画素列。 */
+  function darkWithAccent(accent: [number, number, number]): Uint8ClampedArray {
+    const pixels = new Uint8ClampedArray(400 * 4);
+    for (let i = 0; i < 400; i += 1) {
+      // 暗部は単色にせず少し揺らして、複数の暗クラスタに分かれる実写に寄せる。
+      const dark: [number, number, number] = [10 + (i % 3) * 8, 10 + (i % 5) * 4, 12];
+      pixels.set([...(i < 360 ? dark : accent), 255], i * 4);
+    }
+    return pixels;
+  }
+
+  const redSpot = extractPalette(darkWithAccent([230, 30, 30]), "red-spot");
+  const redSpot2 = extractPalette(darkWithAccent([210, 45, 40]), "red-spot-2");
+  const blueSpot = extractPalette(darkWithAccent([30, 40, 230]), "blue-spot");
+
+  it("amplifies the accent colour difference vs area weighting", () => {
+    // 面積重みでは暗部が支配して赤も青も似て見えるが、
+    // アクセント重みでは差し色の違いが距離としてはっきり出る。
+    expect(paletteDistance(redSpot, blueSpot, "accent")).toBeGreaterThan(
+      paletteDistance(redSpot, blueSpot, "area"),
+    );
+  });
+
+  it("keeps photos with the same accent colour close", () => {
+    // 同じ赤系の差し色なら、青の差し色よりずっと近い。
+    expect(paletteDistance(redSpot, redSpot2, "accent")).toBeLessThan(
+      paletteDistance(redSpot, blueSpot, "accent"),
+    );
+  });
+
+  it("stays symmetric and defaults to area weighting", () => {
+    expect(paletteDistance(redSpot, blueSpot, "accent")).toBe(
+      paletteDistance(blueSpot, redSpot, "accent"),
+    );
+    expect(paletteDistance(redSpot, blueSpot)).toBe(
+      paletteDistance(redSpot, blueSpot, "area"),
+    );
+  });
+
+  it("threads the weighting through the distance matrix", () => {
+    const palettes: PhotoPalette[] = [
+      { photoId: "red", version: 1, swatches: redSpot },
+      { photoId: "blue", version: 1, swatches: blueSpot },
+    ];
+    const accent = buildDistanceMatrix(palettes, "accent");
+    expect(accent[0][1]).toBe(paletteDistance(redSpot, blueSpot, "accent"));
+    const flat = buildDistanceMatrixFlat(palettes, "accent");
+    expect(flat[1]).toBe(accent[0][1]);
+  });
+});
+
 describe("grouping", () => {
   const palettes = [
     toPalette("b-red", solid(220, 20, 20, 50)),
