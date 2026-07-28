@@ -49,6 +49,7 @@ export {
   buildDistanceMatrixFlat,
   reshapeDistanceMatrix,
   groupByThreshold,
+  groupByCount,
   nearestPhotos,
 } from "./palette";
 

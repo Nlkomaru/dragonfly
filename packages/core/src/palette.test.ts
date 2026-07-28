@@ -4,6 +4,7 @@ import {
   buildDistanceMatrix,
   buildDistanceMatrixFlat,
   extractPalette,
+  groupByCount,
   groupByThreshold,
   nearestPhotos,
   oklabToHex,
@@ -201,6 +202,40 @@ describe("grouping", () => {
     expect(groupByThreshold(palettes, matrix, 10)).toEqual([
       ["a-red", "b-red", "c-blue"],
     ]);
+  });
+
+  it("splits into exactly the requested number of groups", () => {
+    // 2 グループなら赤同士がまとまり、青が独立する（大きい方が先）。
+    expect(groupByCount(palettes, matrix, 2)).toEqual([
+      ["a-red", "b-red"],
+      ["c-blue"],
+    ]);
+    // 1 グループなら全部ひとまとまり。
+    expect(groupByCount(palettes, matrix, 1)).toEqual([
+      ["a-red", "b-red", "c-blue"],
+    ]);
+  });
+
+  it("clamps the requested count to the photo count", () => {
+    // 枚数より多く頼んでも、写真 1 枚ずつの 3 グループで打ち止め。
+    expect(groupByCount(palettes, matrix, 10)).toHaveLength(3);
+    // 0 以下でも最低 1 グループは返す。
+    expect(groupByCount(palettes, matrix, 0)).toHaveLength(1);
+    expect(groupByCount([], [], 3)).toEqual([]);
+  });
+
+  it("stops early when only zero-distance photos remain", () => {
+    // 全部同じパレットなら、いくつ頼んでも 1 グループにしかならない。
+    const same = [
+      toPalette("p1", solid(220, 20, 20, 50)),
+      { ...toPalette("p1", solid(220, 20, 20, 50)), photoId: "p2" },
+    ];
+    const sameMatrix = buildDistanceMatrix(same);
+    expect(groupByCount(same, sameMatrix, 2)).toEqual([["p1", "p2"]]);
+  });
+
+  it("is deterministic for the same input", () => {
+    expect(groupByCount(palettes, matrix, 2)).toEqual(groupByCount(palettes, matrix, 2));
   });
 
   it("returns the closest photos excluding itself", () => {
