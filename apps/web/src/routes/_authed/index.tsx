@@ -23,7 +23,7 @@ import {
   PhotoLightbox,
   type FilterComboboxOption,
 } from "@dragonfly/ui";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   useCallback,
   useEffect,
@@ -550,6 +550,13 @@ function GalleryPage() {
             </Button>
           ) : null}
         </div>
+        {/* 色でまとめるビューへの導線。フィルタとは独立した画面なので条件は引き継がない。 */}
+        <Link
+          to="/groups"
+          className="self-center rounded-md px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+        >
+          色でまとめる
+        </Link>
         <p className="ml-auto self-center text-xs text-muted-foreground tabular-nums">
           {apiPhotos.length}
           {nextCursor ? "+" : ""} 枚

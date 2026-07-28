@@ -256,6 +256,40 @@ export const photoTags = sqliteTable(
   ],
 );
 
+/**
+ * 写真 1 枚から抽出したカラーパレット（代表色 5 色）。
+ *
+ * 抽出はサムネイル (AVIF) をデコードできるブラウザ側で行い、サーバーは受け取った値を持つだけ。
+ * 1 枚につき 1 行なので photo_id をそのまま主キーにする。
+ *
+ * owner_id は photos から辿れるが、あえて非正規化して持つ。
+ * 「そのユーザーの全パレット」を join 無しの 1 クエリで引けるようにするため
+ * （/groups は全件をまとめて読み込んで距離行列を作る）。
+ *
+ * swatches は PaletteSwatch[] の JSON。列に展開しないのは、
+ * 検索対象ではなく「まとめて読んでクライアントで計算する」値でしかないため。
+ */
+export const photoPalettes = sqliteTable(
+  "photo_palettes",
+  {
+    photoId: text("photo_id")
+      .primaryKey()
+      .references(() => photos.id, { onDelete: "cascade" }),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    /** 抽出アルゴリズムの版。古ければクライアントが抽出し直して上書きする。 */
+    version: integer("version").notNull(),
+    /** PaletteSwatch[] を JSON.stringify したもの。 */
+    swatches: text("swatches").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [
+    // 一覧は owner_id だけで全件を舐めるので、ここに索引が無いと毎回全走査になる。
+    index("idx_photo_palettes_owner").on(table.ownerId),
+  ],
+);
+
 // リレーションは join を書くときの補助。クエリ自体は明示的な join で書いている。
 export const photosRelations = relations(photos, ({ one, many }) => ({
   owner: one(user, { fields: [photos.ownerId], references: [user.id] }),

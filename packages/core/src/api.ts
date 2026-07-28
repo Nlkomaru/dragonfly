@@ -1,6 +1,7 @@
 // デスクトップ ↔ Web API のリクエスト / レスポンス型。
 // Workers 側のハンドラとデスクトップ側の HTTP クライアントが、この型を共有する。
 
+import type { PaletteSwatch } from "./palette";
 import type { PlayerRef, VrcxMetadata, WorldRef } from "./photo";
 
 /** 1リクエストで問い合わせられるハッシュ数の上限。超える分はクライアントが分割する。 */
@@ -154,6 +155,35 @@ export interface CreateApiKeyResponse {
   key: ApiKeySummary;
   /** 生成直後の一度きりしか取得できない生の鍵。 */
   rawKey: string;
+}
+
+/** 1リクエストで保存できるパレット数の上限。超える分はクライアントが分割する。 */
+export const PALETTE_PUT_LIMIT = 50;
+
+/**
+ * 保存済みのカラーパレット。
+ * 抽出はサムネイルをデコードできるブラウザ側で行い、サーバーは受け取った値を持つだけ。
+ */
+export interface ApiPhotoPalette {
+  photoId: string;
+  /** 抽出アルゴリズムの版。古ければクライアントが抽出し直して上書きする。 */
+  version: number;
+  swatches: PaletteSwatch[];
+}
+
+/** そのユーザーが持つ全パレット。写真一覧と突き合わせて未抽出の写真を割り出す。 */
+export interface ListPalettesResponse {
+  palettes: ApiPhotoPalette[];
+}
+
+/** パレットの一括保存（upsert）。最大 PALETTE_PUT_LIMIT 件。 */
+export interface PutPalettesRequest {
+  palettes: ApiPhotoPalette[];
+}
+
+export interface PutPalettesResponse {
+  /** 実際に保存できた件数。自分の写真でないものは黙って捨てるため、要求より減ることがある。 */
+  saved: number;
 }
 
 /** 接続テスト用。デスクトップの設定画面が鍵の有効性を確かめるのに使う。 */

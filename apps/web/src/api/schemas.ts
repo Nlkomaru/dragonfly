@@ -4,15 +4,18 @@
 // ここが食い違うと実行時にしか気付けない。それを避けるため、ファイル末尾で
 // 「zod から推論した型が core の型に代入できるか」をコンパイル時に検査している。
 
-import { CHECK_HASH_LIMIT } from "@dragonfly/core";
+import { CHECK_HASH_LIMIT, PALETTE_PUT_LIMIT, PALETTE_SIZE } from "@dragonfly/core";
 import type {
   ApiPhoto,
   CheckPhotosRequest,
   CheckPhotosResponse,
   ListFacetsResponse,
+  ListPalettesResponse,
   ListPhotosResponse,
   ListTagsResponse,
   MeResponse,
+  PutPalettesRequest,
+  PutPalettesResponse,
   PutPhotoTagsRequest,
   PutPhotoTagsResponse,
   UploadPhotoMetadata,
@@ -89,6 +92,69 @@ export const PutPhotoTagsRequestSchema = z.object({
 
 export const PutPhotoTagsResponseSchema = z.object({
   tags: z.array(z.string()).meta({ description: "反映後のタグ" }),
+});
+
+// ---------------------------------------------------------------------------
+// カラーパレット
+// ---------------------------------------------------------------------------
+
+/**
+ * 代表色 1 つ。hex は表示用、l/a/b は距離計算用で、同じ色の 2 つの表現。
+ * zod v4 の z.number() は NaN も Infinity も弾くので、有限数の指定は要らない。
+ */
+export const PaletteSwatchSchema = z.object({
+  hex: z
+    .string()
+    .regex(/^#[0-9a-f]{6}$/, "must be a lowercase #rrggbb")
+    .meta({ description: "代表色（小文字の #rrggbb）", example: "#3a5f8a" }),
+  ratio: z
+    .number()
+    .min(0)
+    .max(1)
+    .meta({ description: "この色が占める画素の割合。5 色の合計が 1" }),
+  l: z.number().meta({ description: "OKLab の L" }),
+  a: z.number().meta({ description: "OKLab の a" }),
+  b: z.number().meta({ description: "OKLab の b" }),
+});
+
+/**
+ * 写真 1 枚のパレット。
+ * swatches の長さは抽出側が常に PALETTE_SIZE で揃えるが、
+ * 版が上がって色数が変わりうるので上限だけを固定する。
+ * 空配列だけは弾く。色を持たないパレットは距離が全写真とほぼ 0 になり、
+ * どのグループにも混ざる 1 枚が生まれてしまうため。
+ */
+export const ApiPhotoPaletteSchema = z.object({
+  // 長さの上限を付けるのは、この ID がそのまま inArray の束縛値として D1 へ渡るため。
+  // 1 リクエストに PALETTE_PUT_LIMIT 件入るので、無制限だと 1 本の SQL が
+  // 際限なく膨らむ。UUIDv7 は 36 文字なので 64 あれば足りる。
+  photoId: z.string().min(1).max(64).meta({ description: "写真の ID (UUIDv7)" }),
+  version: z
+    .number()
+    .int()
+    .meta({ description: "抽出アルゴリズムの版。古ければクライアントが抽出し直す" }),
+  swatches: z.array(PaletteSwatchSchema).min(1).max(PALETTE_SIZE),
+});
+
+export const ListPalettesResponseSchema = z.object({
+  palettes: z
+    .array(ApiPhotoPaletteSchema)
+    .meta({ description: "このユーザーの全パレット。未抽出の写真は含まれない" }),
+});
+
+/** PUT /palettes のボディ。同じ photoId を重ねて送られても、保存されるのは 1 行。 */
+export const PutPalettesRequestSchema = z.object({
+  palettes: z
+    .array(ApiPhotoPaletteSchema)
+    .max(PALETTE_PUT_LIMIT)
+    .meta({ description: `保存するパレット。最大 ${PALETTE_PUT_LIMIT} 件` }),
+});
+
+export const PutPalettesResponseSchema = z.object({
+  saved: z
+    .number()
+    .int()
+    .meta({ description: "実際に保存できた件数。自分の写真でないものは含まれない" }),
 });
 
 export const ListTagsResponseSchema = z.object({
@@ -206,3 +272,9 @@ type _PutTagsRequest = Assignable<z.infer<typeof PutPhotoTagsRequestSchema>, Put
 type _PutTagsResponse = Assignable<z.infer<typeof PutPhotoTagsResponseSchema>, PutPhotoTagsResponse>;
 type _ListTags = Assignable<z.infer<typeof ListTagsResponseSchema>, ListTagsResponse>;
 type _ListFacets = Assignable<z.infer<typeof ListFacetsResponseSchema>, ListFacetsResponse>;
+type _ListPalettes = Assignable<z.infer<typeof ListPalettesResponseSchema>, ListPalettesResponse>;
+type _PutPalettesRequest = Assignable<z.infer<typeof PutPalettesRequestSchema>, PutPalettesRequest>;
+type _PutPalettesResponse = Assignable<
+  z.infer<typeof PutPalettesResponseSchema>,
+  PutPalettesResponse
+>;

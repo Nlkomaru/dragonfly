@@ -12,6 +12,7 @@ import { HTTPException } from "hono/http-exception";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { openAPIRouteHandler } from "hono-openapi";
 import openAPIRouter from "./openapi";
+import palettesRouter from "./palettes";
 import photosRouter from "./photos";
 import { MeResponseSchema } from "./schemas";
 import { describeRoute, resolver } from "hono-openapi";
@@ -71,6 +72,7 @@ handler.get(
 
 // --- dragonfly の API ------------------------------------------------------
 handler.route("/v1", photosRouter);
+handler.route("/v1", palettesRouter);
 
 // --- ドキュメント ----------------------------------------------------------
 openAPIRouter.get(
