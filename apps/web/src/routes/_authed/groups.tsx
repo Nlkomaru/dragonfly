@@ -18,6 +18,7 @@ import { Button, EmptyState, PaletteSwatches, cn } from "@dragonfly/ui";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildDistanceMatrixAsync } from "../../lib/buildDistanceMatrixAsync";
+import { ZIP_MAX_PHOTOS, downloadPhotosZip } from "../../lib/downloadPhotosZip";
 import { extractPhotoPalette, mapWithConcurrency } from "../../lib/extractPhotoPalette";
 
 /** 集める写真の上限。距離行列が n^2 なので、これ以上は待ち時間が実用外になる。 */
@@ -464,6 +465,12 @@ function GroupsPage() {
                   <span className="text-xs text-muted-foreground tabular-nums">
                     {similarIds.length} 枚
                   </span>
+                  <ZipButton
+                    photos={[selectedPhoto.id, ...similarIds]
+                      .map((id) => photoById.get(id))
+                      .filter((photo): photo is ApiPhoto => photo !== undefined)}
+                    fileName="dragonfly-similar.zip"
+                  />
                   <Button
                     type="button"
                     size="sm"
@@ -473,18 +480,21 @@ function GroupsPage() {
                     閉じる
                   </Button>
                 </div>
+                {/* similarIds は nearestPhotos が返した距離の昇順そのまま。基準の写真だけ先頭に置く。 */}
                 <PhotoTiles
                   photoIds={[selectedPhoto.id, ...similarIds]}
                   photoById={photoById}
+                  paletteById={paletteById}
                   selectedId={search.photo}
                   onSelect={toggleSelected}
                 />
               </section>
             ) : null}
 
-            {multiGroups.map((group) => (
+            {multiGroups.map((group, index) => (
               <GroupSection
                 key={group[0]}
+                index={index}
                 photoIds={group}
                 photoById={photoById}
                 paletteById={paletteById}
@@ -504,6 +514,7 @@ function GroupsPage() {
                 <PhotoTiles
                   photoIds={loners}
                   photoById={photoById}
+                  paletteById={paletteById}
                   selectedId={search.photo}
                   onSelect={toggleSelected}
                 />
@@ -516,8 +527,105 @@ function GroupsPage() {
   );
 }
 
-/** 1 グループ分の見出し（代表パレット）と写真。 */
+/** 1 グループ分の見出しと写真。 */
 function GroupSection({
+  index,
+  photoIds,
+  photoById,
+  paletteById,
+  selectedId,
+  onSelect,
+}: {
+  /** 画面上の何番目のグループか。ZIP のファイル名に使う。 */
+  index: number;
+  photoIds: string[];
+  photoById: Map<string, ApiPhoto>;
+  paletteById: Map<string, PhotoPalette>;
+  selectedId?: string;
+  onSelect: (photoId: string) => void;
+}) {
+  // 代表色の帯はグループ単位では出さない。写真 1 枚ずつの下に出すので、
+  // 見出しにも並べると同じ帯が二重に見えるだけになる。
+  const photos = photoIds
+    .map((photoId) => photoById.get(photoId))
+    .filter((photo): photo is ApiPhoto => photo !== undefined);
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center gap-3">
+        <h2 className="text-sm font-medium">色の近い写真</h2>
+        <span className="text-xs text-muted-foreground tabular-nums">{photoIds.length} 枚</span>
+        <ZipButton
+          photos={photos}
+          fileName={`dragonfly-group-${String(index + 1).padStart(2, "0")}.zip`}
+        />
+      </div>
+      <PhotoTiles
+        photoIds={photoIds}
+        photoById={photoById}
+        paletteById={paletteById}
+        selectedId={selectedId}
+        onSelect={onSelect}
+      />
+    </section>
+  );
+}
+
+/**
+ * グループの写真を ZIP でまとめて保存するボタン。
+ *
+ * 落とすのはサムネイルではなく画像の本体なので、枚数ぶんの取得に時間がかかる。
+ * 進捗はボタンのラベルに出し、押している間は多重起動できないようにする。
+ */
+function ZipButton({ photos, fileName }: { photos: ApiPhoto[]; fileName: string }) {
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const tooMany = photos.length > ZIP_MAX_PHOTOS;
+
+  const handleClick = useCallback(() => {
+    setError(null);
+    setProgress({ done: 0, total: photos.length });
+    void (async () => {
+      try {
+        const { skipped } = await downloadPhotosZip(photos, fileName, (done, total) =>
+          setProgress({ done, total }),
+        );
+        // 取れなかった写真があっても保存自体は成功しているので、件数だけ添える。
+        if (skipped > 0) setError(`${skipped} 枚は取得できず、除いて保存しました`);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "ZIP を作成できませんでした");
+      } finally {
+        setProgress(null);
+      }
+    })();
+  }, [photos, fileName]);
+
+  return (
+    <span className="flex items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={handleClick}
+        disabled={progress !== null || tooMany}
+        title={
+          tooMany
+            ? `一度に保存できるのは ${ZIP_MAX_PHOTOS} 枚までです`
+            : "このグループの写真を、サムネイルではなく元の画像で ZIP に保存します"
+        }
+      >
+        {progress ? `保存中… ${progress.done}/${progress.total}` : "ZIP で保存"}
+      </Button>
+      {error ? <span className="text-xs text-destructive">{error}</span> : null}
+    </span>
+  );
+}
+
+/**
+ * 写真 ID の並びをサムネイルのグリッドで並べる。押すと「似た写真」の基準になる。
+ * 並び順は呼び出し側が決めたものをそのまま使う（似た写真のセクションでは距離の昇順）。
+ */
+function PhotoTiles({
   photoIds,
   photoById,
   paletteById,
@@ -530,46 +638,13 @@ function GroupSection({
   selectedId?: string;
   onSelect: (photoId: string) => void;
 }) {
-  // 代表色はグループの先頭の写真のパレットをそのまま使う。
-  // 連結成分の中では色が近いことが保証されているので、平均を取っても見た目は変わらない。
-  const representative = paletteById.get(photoIds[0]);
-
   return (
-    <section className="flex flex-col gap-3">
-      <div className="flex items-center gap-3">
-        {representative ? (
-          <PaletteSwatches className="w-32 shrink-0" swatches={representative.swatches} />
-        ) : null}
-        <span className="text-xs text-muted-foreground tabular-nums">{photoIds.length} 枚</span>
-      </div>
-      <PhotoTiles
-        photoIds={photoIds}
-        photoById={photoById}
-        selectedId={selectedId}
-        onSelect={onSelect}
-      />
-    </section>
-  );
-}
-
-/** 写真 ID の並びをサムネイルのグリッドで並べる。押すと「似た写真」の基準になる。 */
-function PhotoTiles({
-  photoIds,
-  photoById,
-  selectedId,
-  onSelect,
-}: {
-  photoIds: string[];
-  photoById: Map<string, ApiPhoto>;
-  selectedId?: string;
-  onSelect: (photoId: string) => void;
-}) {
-  return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-2">
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-3">
       {photoIds.map((photoId) => {
         const photo = photoById.get(photoId);
         // パレットだけ残って写真が消えている、といった食い違いは黙って飛ばす。
         if (!photo) return null;
+        const palette = paletteById.get(photoId);
         return (
           <button
             key={photoId}
@@ -580,18 +655,24 @@ function PhotoTiles({
               selectedId === photoId ? "似た写真の表示をやめる" : "この写真に似た写真を見る"
             }
             aria-pressed={selectedId === photoId}
-            className={cn(
-              "aspect-video overflow-hidden rounded-md border bg-muted transition-colors hover:border-ring",
-              selectedId === photoId && "border-primary ring-2 ring-primary",
-            )}
+            className="group flex flex-col items-center gap-1.5"
           >
-            <img
-              src={photo.thumbUrl}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              className="size-full object-cover"
-            />
+            <span
+              className={cn(
+                "block aspect-video w-full overflow-hidden rounded-md border bg-muted transition-colors group-hover:border-ring",
+                selectedId === photoId && "border-primary ring-2 ring-primary",
+              )}
+            >
+              <img
+                src={photo.thumbUrl}
+                alt=""
+                loading="lazy"
+                decoding="async"
+                className="size-full object-cover"
+              />
+            </span>
+            {/* その写真自身の代表色。なぜ同じグループに入ったのかが目で分かるようにする。 */}
+            {palette ? <PaletteSwatches className="w-4/5" swatches={palette.swatches} /> : null}
           </button>
         );
       })}
