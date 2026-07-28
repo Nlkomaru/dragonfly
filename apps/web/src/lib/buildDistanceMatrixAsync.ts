@@ -3,7 +3,7 @@
 // このモジュールは SSR でも評価されうる（ルートから import されるため）。
 // Worker の生成は必ず関数の呼び出し時に行い、トップレベルでは self / Worker に触れない。
 
-import type { DistanceMatrix, PhotoPalette } from "@dragonfly/core";
+import type { DistanceMatrix, PaletteWeighting, PhotoPalette } from "@dragonfly/core";
 import { buildDistanceMatrix, reshapeDistanceMatrix } from "@dragonfly/core";
 import type { DistanceMatrixRequest, DistanceMatrixResponse } from "./distanceMatrixWorker";
 
@@ -21,6 +21,7 @@ let nextRequestId = 1;
  */
 export function buildDistanceMatrixAsync(
   palettes: PhotoPalette[],
+  weighting: PaletteWeighting,
   signal?: AbortSignal,
 ): Promise<DistanceMatrix> {
   // 空なら Worker を起こす意味がない。
@@ -35,7 +36,7 @@ export function buildDistanceMatrixAsync(
     });
   } catch {
     // Worker が作れない環境ではメインスレッドで計算する（枚数が多いと固まるが、動かないよりはよい）。
-    return Promise.resolve(buildDistanceMatrix(palettes));
+    return Promise.resolve(buildDistanceMatrix(palettes, weighting));
   }
 
   return new Promise<DistanceMatrix>((resolve, reject) => {
@@ -64,7 +65,7 @@ export function buildDistanceMatrixAsync(
       cleanup();
       // Worker の読み込み自体に失敗しても new Worker() は投げないので、上の catch では拾えない。
       // 実際にはこちらの方が起きやすいため、同じくメインスレッドの同期版に落とす。
-      resolve(buildDistanceMatrix(palettes));
+      resolve(buildDistanceMatrix(palettes, weighting));
     };
 
     const onAbort = () => {
@@ -81,6 +82,6 @@ export function buildDistanceMatrixAsync(
     worker.addEventListener("error", onError);
     signal?.addEventListener("abort", onAbort);
 
-    worker.postMessage({ id, palettes } satisfies DistanceMatrixRequest);
+    worker.postMessage({ id, palettes, weighting } satisfies DistanceMatrixRequest);
   });
 }

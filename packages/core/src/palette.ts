@@ -403,6 +403,39 @@ export function extractPalette(
 // ---------------------------------------------------------------------------
 
 /**
+ * パレット距離の重み付けの方式。
+ *
+ * - `area`   色が画像に占める面積（ratio）だけで重み付けする従来の方式。
+ * - `accent` 彩度で増幅し、面積の効きは平方根で弱める方式。ほぼ黒い写真の中の
+ *            一箇所の赤のような「差し色」が距離を支配するようになる。
+ *
+ * どちらも保存済みの swatch（l/a/b/ratio）から計算できるので、切り替えに
+ * 再抽出は要らない。距離行列だけ作り直せばよい。
+ */
+export type PaletteWeighting = "area" | "accent";
+
+/**
+ * アクセント重みの彩度の下駄。OKLab の彩度（sqrt(a^2+b^2)）は sRGB でおよそ 0〜0.32。
+ * 0 のままだと無彩色だけの写真で重みが全部 0 になり距離を測れなくなるので、
+ * わずかに底上げして「無彩色同士でも面積比で比べられる」ようにする。
+ */
+const ACCENT_CHROMA_FLOOR = 0.02;
+
+/**
+ * swatch ごとの重みを方式に応じて計算する。
+ *
+ * accent は「面積の平方根 × 彩度」。平方根で面積の支配を圧縮するので、
+ * 面積 1% の差し色でも 100% の 1/10 の重みが残る（線形なら 1/100）。
+ * そこに彩度を掛けることで、鮮やかな色ほど面積以上に強く効く。
+ */
+function swatchWeights(swatches: PaletteSwatch[], weighting: PaletteWeighting): number[] {
+  if (weighting === "area") return swatches.map((s) => s.ratio);
+  return swatches.map(
+    (s) => Math.sqrt(s.ratio) * (ACCENT_CHROMA_FLOOR + Math.hypot(s.a, s.b)),
+  );
+}
+
+/**
  * 並び順に依存しない比較キー。
  * distance(a, b) と distance(b, a) で必ず同じ手順を踏ませるために使う。
  */
@@ -424,14 +457,18 @@ function paletteKey(swatches: PaletteSwatch[]): string {
  *
  * 引数を入れ替えても必ず同じ値になる（先に決定的な順序へ正規化しているため）。
  */
-export function paletteDistance(a: PaletteSwatch[], b: PaletteSwatch[]): number {
+export function paletteDistance(
+  a: PaletteSwatch[],
+  b: PaletteSwatch[],
+  weighting: PaletteWeighting = "area",
+): number {
   if (a.length === 0 || b.length === 0) return 0;
 
   // 貪欲法は同点ペアの選び方で結果が変わりうる。引数の順序で揺れないよう、
   // 比較キーの辞書順で「どちらを左に置くか」を先に固定してしまう。
   return paletteKey(a) <= paletteKey(b)
-    ? orderedPaletteDistance(a, b)
-    : orderedPaletteDistance(b, a);
+    ? orderedPaletteDistance(a, b, weighting)
+    : orderedPaletteDistance(b, a, weighting);
 }
 
 /**
@@ -440,7 +477,15 @@ export function paletteDistance(a: PaletteSwatch[], b: PaletteSwatch[]): number 
  * 正規化（どちらを左に置くか）は呼び出し側の責任。buildDistanceMatrix は
  * 比較キーを写真ごとに 1 回だけ作って使い回したいので、ここを直接呼ぶ。
  */
-function orderedPaletteDistance(left: PaletteSwatch[], right: PaletteSwatch[]): number {
+function orderedPaletteDistance(
+  left: PaletteSwatch[],
+  right: PaletteSwatch[],
+  weighting: PaletteWeighting,
+): number {
+  // 重みは swatch ごとに 1 回だけ計算する（ペアごとに計算し直すと 25 回×2 になる）。
+  const leftWeights = swatchWeights(left, weighting);
+  const rightWeights = swatchWeights(right, weighting);
+
   // 全ペアの距離を並べ、小さい順に確定していく。
   const pairs: Array<{ i: number; j: number; distance: number; weight: number }> =
     [];
@@ -450,7 +495,7 @@ function orderedPaletteDistance(left: PaletteSwatch[], right: PaletteSwatch[]): 
         i,
         j,
         distance: Math.sqrt(squaredDistance(left[i], right[j])),
-        weight: Math.min(left[i].ratio, right[j].ratio),
+        weight: Math.min(leftWeights[i], rightWeights[j]),
       });
     }
   }
@@ -494,7 +539,10 @@ export type DistanceMatrix = readonly ArrayLike<number>[];
  * n が大きくても構造化クローンのコピーが発生しない。
  * 添字の規約は buildDistanceMatrix と同じで、`flat[i * n + j]` が i 番と j 番の距離。
  */
-export function buildDistanceMatrixFlat(palettes: PhotoPalette[]): Float64Array {
+export function buildDistanceMatrixFlat(
+  palettes: PhotoPalette[],
+  weighting: PaletteWeighting = "area",
+): Float64Array {
   const n = palettes.length;
   const flat = new Float64Array(n * n);
   // 比較キーは距離の値には効かず「どちらを左に置くか」を決めるだけなので、
@@ -508,8 +556,8 @@ export function buildDistanceMatrixFlat(palettes: PhotoPalette[]): Float64Array 
         a.length === 0 || b.length === 0
           ? 0
           : keys[i] <= keys[j]
-            ? orderedPaletteDistance(a, b)
-            : orderedPaletteDistance(b, a);
+            ? orderedPaletteDistance(a, b, weighting)
+            : orderedPaletteDistance(b, a, weighting);
       flat[i * n + j] = d;
       flat[j * n + i] = d;
     }
@@ -536,9 +584,12 @@ export function reshapeDistanceMatrix(flat: Float64Array, n: number): Float64Arr
  * Worker を使えない環境向けの同期版。枚数が多い場合はメインスレッドを止めるので、
  * ブラウザからは buildDistanceMatrixFlat を Worker 側で呼ぶ方を優先すること。
  */
-export function buildDistanceMatrix(palettes: PhotoPalette[]): number[][] {
+export function buildDistanceMatrix(
+  palettes: PhotoPalette[],
+  weighting: PaletteWeighting = "area",
+): number[][] {
   const n = palettes.length;
-  const flat = buildDistanceMatrixFlat(palettes);
+  const flat = buildDistanceMatrixFlat(palettes, weighting);
   return Array.from({ length: n }, (_, i) => Array.from(flat.subarray(i * n, (i + 1) * n)));
 }
 

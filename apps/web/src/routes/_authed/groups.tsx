@@ -10,6 +10,7 @@ import type {
   DistanceMatrix,
   ListPalettesResponse,
   ListPhotosResponse,
+  PaletteWeighting,
   PhotoPalette,
   PutPalettesResponse,
 } from "@dragonfly/core";
@@ -20,7 +21,7 @@ import {
   groupByThreshold,
   nearestPhotos,
 } from "@dragonfly/core";
-import { Button, EmptyState, PaletteSwatches, cn } from "@dragonfly/ui";
+import { Button, Checkbox, EmptyState, PaletteSwatches, cn } from "@dragonfly/ui";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildDistanceMatrixAsync } from "../../lib/buildDistanceMatrixAsync";
@@ -59,6 +60,8 @@ export type GroupsSearch = {
   threshold?: number;
   /** mode === "count" のときのグループ数。 */
   count?: number;
+  /** true なら差し色（彩度の高い色）を重視した距離で比べる。 */
+  accent?: boolean;
   /** 「似た写真」の基準にしている写真 ID。 */
   photo?: string;
 };
@@ -112,6 +115,8 @@ export const Route = createFileRoute("/_authed/groups")({
       mode: raw.mode === "count" ? "count" : undefined,
       threshold: asThreshold(raw.threshold),
       count: asCount(raw.count),
+      // 真のときだけ URL に載せる。それ以外は既定（面積重み）扱い。
+      accent: raw.accent === true || raw.accent === "true" ? true : undefined,
       photo: asString(raw.photo),
     };
   },
@@ -141,6 +146,10 @@ function GroupsPage() {
 
   // グループ分けの方式。URL に無ければ従来の「色の近さ」方式。
   const mode: GroupMode = search.mode ?? "threshold";
+  // 距離の重み付け。アクセント重視は「ほぼ黒に一箇所だけ赤」のような差し色を強く効かせる。
+  const weighting: PaletteWeighting = search.accent ? "accent" : "area";
+  // 今ある行列がどちらの重み付けで作られたか。切り替えたときだけ作り直すための印。
+  const matrixWeightingRef = useRef<PaletteWeighting>("area");
 
   // スライダーは掴んでいる間ずっと動くので、離すまでは手元の値だけ動かす。
   // URL に毎フレーム書くと履歴が溢れ、groupByThreshold も走りっぱなしになる。
@@ -351,8 +360,9 @@ function GroupsPage() {
     const controller = new AbortController();
     void (async () => {
       try {
-        const built = await buildDistanceMatrixAsync(palettes, controller.signal);
+        const built = await buildDistanceMatrixAsync(palettes, weighting, controller.signal);
         if (controller.signal.aborted) return;
+        matrixWeightingRef.current = weighting;
         setMatrix(built);
         setPhase("ready");
       } catch (error) {
@@ -365,7 +375,13 @@ function GroupsPage() {
 
     // 画面を離れたら計算を捨てる。Worker も terminate されるので CPU を掴んだままにならない。
     return () => controller.abort();
-  }, [phase, palettes]);
+  }, [phase, palettes, weighting]);
+
+  // 重み付けを切り替えたら距離そのものが変わるので、行列を作り直す。
+  // 抽出済みのパレットはそのまま使えるため、grouping からやり直すだけでよい。
+  useEffect(() => {
+    if (phase === "ready" && matrixWeightingRef.current !== weighting) setPhase("grouping");
+  }, [phase, weighting]);
 
   // しきい値・グループ数・方式を変えたときはここだけが走る（距離計算はやり直さない）。
   const groups = useMemo(() => {
@@ -428,6 +444,17 @@ function GroupsPage() {
       replace: true,
     });
   }, [navigate, draftCount]);
+
+  /** 差し色重視の重み付けを切り替える。オフのときは URL を汚さないよう undefined にする。 */
+  const toggleAccent = useCallback(
+    (checked: boolean) => {
+      void navigate({
+        search: (prev) => ({ ...prev, accent: checked ? true : undefined }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
 
   /** 方式を切り替える。既定（threshold）のときは URL を汚さないよう undefined にする。 */
   const switchMode = useCallback(
@@ -513,6 +540,20 @@ function GroupsPage() {
             <span className="tabular-nums">{draftCount}</span>
           </label>
         )}
+
+        {/* 差し色重視。ほぼ黒い写真の中の一箇所の赤のような、面積は小さくても
+            彩度の高い色を距離に強く効かせる。切り替えると距離行列を作り直す。 */}
+        <label
+          className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
+          title="面積が小さくても彩度の高い色（差し色）を強く効かせて比べます"
+        >
+          <Checkbox
+            checked={search.accent === true}
+            onCheckedChange={(checked) => toggleAccent(checked === true)}
+            disabled={phase !== "ready"}
+          />
+          差し色を重視
+        </label>
 
         {/* 抽出アルゴリズムを変えたときや、結果に納得がいかないときの手動やり直し。
             保存済みのパレットを無視して全部取り直すので、枚数ぶんの時間がかかる。 */}

@@ -6,13 +6,15 @@
 // 受け渡しは flat な Float64Array で行う。TypedArray は transfer できるので、
 // 4,000,000 要素（2000 枚 = 32MB）でもコピーが発生しない。
 
-import type { PhotoPalette } from "@dragonfly/core";
+import type { PaletteWeighting, PhotoPalette } from "@dragonfly/core";
 import { buildDistanceMatrixFlat } from "@dragonfly/core";
 
 /** メインスレッドから受け取る要求。id は応答を要求と対応付けるためだけのもの。 */
 export type DistanceMatrixRequest = {
   id: number;
   palettes: PhotoPalette[];
+  /** 距離の重み付け。面積（area）かアクセント色重視（accent）か。 */
+  weighting: PaletteWeighting;
 };
 
 /** Worker が返す応答。成功なら flat 行列、失敗なら理由を返す。 */
@@ -36,9 +38,9 @@ const workerScope = self as unknown as {
 };
 
 workerScope.addEventListener("message", (event) => {
-  const { id, palettes } = event.data;
+  const { id, palettes, weighting } = event.data;
   try {
-    const flat = buildDistanceMatrixFlat(palettes);
+    const flat = buildDistanceMatrixFlat(palettes, weighting);
     // バッファごと譲渡する。以後この Worker 側から flat は読めなくなるが、返した時点で用済み。
     workerScope.postMessage({ id, ok: true, flat, size: palettes.length }, [flat.buffer]);
   } catch (error) {
