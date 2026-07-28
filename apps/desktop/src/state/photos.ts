@@ -13,6 +13,26 @@ export const skippedCountAtom = atom(0);
 /** 走査中かどうか。走査中は再走査ボタンを止める。 */
 export const scanningAtom = atom(false);
 
+/** 送信済み判定の進行状況。null なら実行していない。 */
+export interface UploadCheckState {
+  /** 判定が終わった月の数。 */
+  doneMonths: number;
+  /** 判定する月の総数。 */
+  totalMonths: number;
+  /** いま判定している月（`YYYY-MM`）。終わっていれば空文字。 */
+  currentMonth: string;
+  /** 判定に失敗した月。原因が分かるようメッセージも持つ。 */
+  failed: Array<{ month: string; message: string }>;
+}
+
+/**
+ * 送信済み判定の進行状況。
+ *
+ * 以前はこの処理が失敗しても画面に何も出ず、「送信済みが 1 件も出ない」状態と
+ * 「まだ判定していない」状態が見分けられなかった。失敗した月をここに残して表示する。
+ */
+export const uploadCheckStateAtom = atom<UploadCheckState | null>(null);
+
 /** 送信の進行状況。null なら送信していない。 */
 export interface UploadState {
   /** 送信が終わった件数（成功・失敗を問わない）。 */

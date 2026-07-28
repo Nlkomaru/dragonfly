@@ -101,6 +101,16 @@ async function toApiPhoto(
   };
 }
 
+/**
+ * 1 クエリに入れる IN の要素数の上限。
+ *
+ * D1 は 1 クエリあたりのバインド変数を 100 個までしか受け付けず、超えると
+ * クエリ自体が失敗する。owner_id のぶんを空けて余裕を持たせた値にしてある。
+ * CHECK_HASH_LIMIT (500) はこの上限とは無関係に決まっているので、
+ * ここで必ず分割すること。
+ */
+const D1_IN_CHUNK = 90;
+
 /** 送信済みハッシュの一括判定。所有者で絞るので他人の写真は決して当たらない。 */
 export async function findUploadedHashes(
   db: DrizzleDb,
@@ -108,11 +118,22 @@ export async function findUploadedHashes(
   hashes: string[],
 ): Promise<string[]> {
   if (hashes.length === 0) return [];
-  const rows = await db
-    .select({ sourceSha256: photos.sourceSha256 })
-    .from(photos)
-    .where(and(eq(photos.ownerId, ownerId), inArray(photos.sourceSha256, hashes)));
-  return rows.map((row) => row.sourceSha256);
+
+  // D1 のバインド変数の上限に収まるように割ってから引く。
+  const chunks: string[][] = [];
+  for (let i = 0; i < hashes.length; i += D1_IN_CHUNK) {
+    chunks.push(hashes.slice(i, i + D1_IN_CHUNK));
+  }
+
+  const results = await Promise.all(
+    chunks.map((chunk) =>
+      db
+        .select({ sourceSha256: photos.sourceSha256 })
+        .from(photos)
+        .where(and(eq(photos.ownerId, ownerId), inArray(photos.sourceSha256, chunk))),
+    ),
+  );
+  return results.flat().map((row) => row.sourceSha256);
 }
 
 /** (owner_id, source_sha256) から既存の写真 ID を引く。冪等判定に使う。 */
