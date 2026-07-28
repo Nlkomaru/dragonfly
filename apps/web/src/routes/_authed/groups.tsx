@@ -13,7 +13,13 @@ import type {
   PhotoPalette,
   PutPalettesResponse,
 } from "@dragonfly/core";
-import { PALETTE_PUT_LIMIT, PALETTE_VERSION, groupByThreshold, nearestPhotos } from "@dragonfly/core";
+import {
+  PALETTE_PUT_LIMIT,
+  PALETTE_VERSION,
+  groupByCount,
+  groupByThreshold,
+  nearestPhotos,
+} from "@dragonfly/core";
 import { Button, EmptyState, PaletteSwatches, cn } from "@dragonfly/ui";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -33,13 +39,26 @@ const THRESHOLD_STEP = 0.005;
 /** 既定のしきい値。体感でほどよく分かれる値を初期位置にする。 */
 const THRESHOLD_DEFAULT = 0.12;
 
+/** グループ数モードのスライダー範囲。2 未満は分ける意味が無く、50 超は一覧できない。 */
+const COUNT_MIN = 2;
+const COUNT_MAX = 50;
+/** 既定のグループ数。 */
+const COUNT_DEFAULT = 10;
+
 /** 「この写真に似た写真」に出す件数。 */
 const NEAREST_LIMIT = 24;
 
+/** グループ分けの方式。threshold は色の近さで繋ぐ従来方式、count はグループ数を固定する方式。 */
+export type GroupMode = "threshold" | "count";
+
 /** URL 検索パラメータ。共有・リロードで同じグループ分けを再現する。 */
 export type GroupsSearch = {
+  /** グループ分けの方式。省略時は threshold（従来の色の近さ）。 */
+  mode?: GroupMode;
   /** union-find のしきい値。小さいほど細かく分かれる。 */
   threshold?: number;
+  /** mode === "count" のときのグループ数。 */
+  count?: number;
   /** 「似た写真」の基準にしている写真 ID。 */
   photo?: string;
 };
@@ -51,6 +70,12 @@ type Phase = "loading" | "extracting" | "saving" | "grouping" | "ready" | "error
 function clampThreshold(value: number): number {
   if (!Number.isFinite(value)) return THRESHOLD_DEFAULT;
   return Math.min(THRESHOLD_MAX, Math.max(THRESHOLD_MIN, value));
+}
+
+/** グループ数をスライダーの範囲に収める。こちらは個数なので整数に丸める。 */
+function clampCount(value: number): number {
+  if (!Number.isFinite(value)) return COUNT_DEFAULT;
+  return Math.min(COUNT_MAX, Math.max(COUNT_MIN, Math.trunc(value)));
 }
 
 /** 配列を size 件ずつに割る。PUT の上限（PALETTE_PUT_LIMIT）に合わせるのに使う。 */
@@ -73,8 +98,20 @@ export const Route = createFileRoute("/_authed/groups")({
       }
       return undefined;
     };
+    // count は整数なので threshold とは別のパーサにする（clamp の丸め方が違う）。
+    const asCount = (value: unknown): number | undefined => {
+      if (typeof value === "number") return Number.isFinite(value) ? clampCount(value) : undefined;
+      if (typeof value === "string" && value.length > 0) {
+        const n = Number(value);
+        if (Number.isFinite(n)) return clampCount(n);
+      }
+      return undefined;
+    };
     return {
+      // 知らない値は既定（threshold 方式）に落とす。URL を手で書き換えられても壊れないように。
+      mode: raw.mode === "count" ? "count" : undefined,
       threshold: asThreshold(raw.threshold),
+      count: asCount(raw.count),
       photo: asString(raw.photo),
     };
   },
@@ -102,15 +139,25 @@ function GroupsPage() {
   // Worker が作った距離行列。Float64Array の行ビューなので、読み取りは number[][] と同じ。
   const [matrix, setMatrix] = useState<DistanceMatrix | null>(null);
 
+  // グループ分けの方式。URL に無ければ従来の「色の近さ」方式。
+  const mode: GroupMode = search.mode ?? "threshold";
+
   // スライダーは掴んでいる間ずっと動くので、離すまでは手元の値だけ動かす。
   // URL に毎フレーム書くと履歴が溢れ、groupByThreshold も走りっぱなしになる。
   const committedThreshold = search.threshold ?? THRESHOLD_DEFAULT;
   const [draftThreshold, setDraftThreshold] = useState(committedThreshold);
 
+  // グループ数のスライダーも同じ理屈で、離すまでは手元の値だけ動かす。
+  const committedCount = search.count ?? COUNT_DEFAULT;
+  const [draftCount, setDraftCount] = useState(committedCount);
+
   // 戻る操作や共有 URL 直開きでも、つまみの位置を URL に揃える。
   useEffect(() => {
     setDraftThreshold(committedThreshold);
   }, [committedThreshold]);
+  useEffect(() => {
+    setDraftCount(committedCount);
+  }, [committedCount]);
 
   // 再生成ボタンを押すたびに増える。これを deps にして、パイプラインを頭から回し直す。
   const [runId, setRunId] = useState(0);
@@ -320,14 +367,19 @@ function GroupsPage() {
     return () => controller.abort();
   }, [phase, palettes]);
 
-  // しきい値を変えたときはここだけが走る（k-means も距離計算もやり直さない）。
-  const groups = useMemo(
-    () => (matrix ? groupByThreshold(palettes, matrix, committedThreshold) : []),
-    [matrix, palettes, committedThreshold],
-  );
+  // しきい値・グループ数・方式を変えたときはここだけが走る（距離計算はやり直さない）。
+  const groups = useMemo(() => {
+    if (!matrix) return [];
+    return mode === "count"
+      ? groupByCount(palettes, matrix, committedCount)
+      : groupByThreshold(palettes, matrix, committedThreshold);
+  }, [matrix, palettes, mode, committedThreshold, committedCount]);
 
   // 2 枚以上のグループと、1 枚だけの写真を分ける。後者はまとめて末尾に置く。
+  // グループ数固定モードでは「頼んだ数のグループを見たい」のが目的なので、
+  // 1 枚だけのグループもそのまま 1 つのグループとして見せる。
   const { multiGroups, loners } = useMemo(() => {
+    if (mode === "count") return { multiGroups: groups, loners: [] };
     const multi: string[][] = [];
     const single: string[] = [];
     for (const group of groups) {
@@ -335,13 +387,20 @@ function GroupsPage() {
       else single.push(...group);
     }
     return { multiGroups: multi, loners: single };
-  }, [groups]);
+  }, [groups, mode]);
 
-  // 選択中の写真に似た写真。行列は同じものを使うので追加の計算は軽い。
-  const similarIds = useMemo(() => {
+  // 選択中の写真に似た写真（距離の昇順）。行列は同じものを使うので追加の計算は軽い。
+  const similar = useMemo(() => {
     if (!matrix || !search.photo) return [];
-    return nearestPhotos(palettes, matrix, search.photo, NEAREST_LIMIT).map((n) => n.photoId);
+    return nearestPhotos(palettes, matrix, search.photo, NEAREST_LIMIT);
   }, [matrix, palettes, search.photo]);
+
+  // 「似た写真」タイルの下に出す距離のラベル。基準の写真は載っていない（似た写真だけ）。
+  const distanceById = useMemo(
+    () => new Map(similar.map((n) => [n.photoId, n.distance])),
+    [similar],
+  );
+  const similarIds = useMemo(() => similar.map((n) => n.photoId), [similar]);
 
   /** 写真をクリックしたとき。同じ写真をもう一度押したら選択を外す。 */
   const toggleSelected = useCallback(
@@ -362,6 +421,25 @@ function GroupsPage() {
     });
   }, [navigate, draftThreshold]);
 
+  /** つまみを離した時点でグループ数を URL に反映する。 */
+  const commitCount = useCallback(() => {
+    void navigate({
+      search: (prev) => ({ ...prev, count: draftCount }),
+      replace: true,
+    });
+  }, [navigate, draftCount]);
+
+  /** 方式を切り替える。既定（threshold）のときは URL を汚さないよう undefined にする。 */
+  const switchMode = useCallback(
+    (next: GroupMode) => {
+      void navigate({
+        search: (prev) => ({ ...prev, mode: next === "threshold" ? undefined : next }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
+
   const selectedPhoto = search.photo ? photoById.get(search.photo) : undefined;
 
   return (
@@ -374,24 +452,67 @@ function GroupsPage() {
         >
           ギャラリーへ戻る
         </Link>
-        <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-          色の近さ
-          {/* packages/ui にスライダーが無いので素の input[type=range] を使う。 */}
-          <input
-            type="range"
-            min={THRESHOLD_MIN}
-            max={THRESHOLD_MAX}
-            step={THRESHOLD_STEP}
-            value={draftThreshold}
-            onChange={(e) => setDraftThreshold(Number(e.target.value))}
-            // ドラッグ終了とキー操作の両方で確定する（キーボードでも動かせるように）。
-            onPointerUp={commitThreshold}
-            onKeyUp={commitThreshold}
-            className="w-48 accent-primary"
-            disabled={phase !== "ready"}
-          />
-          <span className="tabular-nums">{draftThreshold.toFixed(3)}</span>
-        </label>
+        {/* 方式の切り替え。packages/ui にセグメントコントロールが無いので Button を並べる。 */}
+        <div className="flex shrink-0 items-center gap-0.5 rounded-md border p-0.5">
+          <Button
+            type="button"
+            size="sm"
+            variant={mode === "threshold" ? "secondary" : "ghost"}
+            aria-pressed={mode === "threshold"}
+            onClick={() => switchMode("threshold")}
+            title="色の近いものを繋いでまとめます。グループ数はしきい値しだいで変わります"
+          >
+            色の近さ
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={mode === "count" ? "secondary" : "ghost"}
+            aria-pressed={mode === "count"}
+            onClick={() => switchMode("count")}
+            title="指定した数のグループに写真を振り分けます"
+          >
+            グループ数固定
+          </Button>
+        </div>
+
+        {mode === "threshold" ? (
+          <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+            色の近さ
+            {/* packages/ui にスライダーが無いので素の input[type=range] を使う。 */}
+            <input
+              type="range"
+              min={THRESHOLD_MIN}
+              max={THRESHOLD_MAX}
+              step={THRESHOLD_STEP}
+              value={draftThreshold}
+              onChange={(e) => setDraftThreshold(Number(e.target.value))}
+              // ドラッグ終了とキー操作の両方で確定する（キーボードでも動かせるように）。
+              onPointerUp={commitThreshold}
+              onKeyUp={commitThreshold}
+              className="w-48 accent-primary"
+              disabled={phase !== "ready"}
+            />
+            <span className="tabular-nums">{draftThreshold.toFixed(3)}</span>
+          </label>
+        ) : (
+          <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+            グループ数
+            <input
+              type="range"
+              min={COUNT_MIN}
+              max={COUNT_MAX}
+              step={1}
+              value={draftCount}
+              onChange={(e) => setDraftCount(Number(e.target.value))}
+              onPointerUp={commitCount}
+              onKeyUp={commitCount}
+              className="w-48 accent-primary"
+              disabled={phase !== "ready"}
+            />
+            <span className="tabular-nums">{draftCount}</span>
+          </label>
+        )}
 
         {/* 抽出アルゴリズムを変えたときや、結果に納得がいかないときの手動やり直し。
             保存済みのパレットを無視して全部取り直すので、枚数ぶんの時間がかかる。 */}
@@ -487,6 +608,7 @@ function GroupsPage() {
                   paletteById={paletteById}
                   selectedId={search.photo}
                   onSelect={toggleSelected}
+                  distanceById={distanceById}
                 />
               </section>
             ) : null}
@@ -495,6 +617,8 @@ function GroupsPage() {
               <GroupSection
                 key={group[0]}
                 index={index}
+                // 固定数モードは「何番目のグループか」が見出しとして分かりやすい。
+                title={mode === "count" ? `グループ ${index + 1}` : "色の近い写真"}
                 photoIds={group}
                 photoById={photoById}
                 paletteById={paletteById}
@@ -530,6 +654,7 @@ function GroupsPage() {
 /** 1 グループ分の見出しと写真。 */
 function GroupSection({
   index,
+  title,
   photoIds,
   photoById,
   paletteById,
@@ -538,6 +663,8 @@ function GroupSection({
 }: {
   /** 画面上の何番目のグループか。ZIP のファイル名に使う。 */
   index: number;
+  /** セクションの見出し。方式によって呼び分ける（色の近い写真 / グループ N）。 */
+  title: string;
   photoIds: string[];
   photoById: Map<string, ApiPhoto>;
   paletteById: Map<string, PhotoPalette>;
@@ -553,7 +680,7 @@ function GroupSection({
   return (
     <section className="flex flex-col gap-3">
       <div className="flex items-center gap-3">
-        <h2 className="text-sm font-medium">色の近い写真</h2>
+        <h2 className="text-sm font-medium">{title}</h2>
         <span className="text-xs text-muted-foreground tabular-nums">{photoIds.length} 枚</span>
         <ZipButton
           photos={photos}
@@ -631,12 +758,18 @@ function PhotoTiles({
   paletteById,
   selectedId,
   onSelect,
+  distanceById,
 }: {
   photoIds: string[];
   photoById: Map<string, ApiPhoto>;
   paletteById: Map<string, PhotoPalette>;
   selectedId?: string;
   onSelect: (photoId: string) => void;
+  /**
+   * 基準の写真からの距離。渡された場合だけタイルの下に数値を出す（似た写真のセクション用）。
+   * 載っていない写真（基準そのもの）には「基準」と表示する。
+   */
+  distanceById?: Map<string, number>;
 }) {
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-3">
@@ -673,6 +806,14 @@ function PhotoTiles({
             </span>
             {/* その写真自身の代表色。なぜ同じグループに入ったのかが目で分かるようにする。 */}
             {palette ? <PaletteSwatches className="w-4/5" swatches={palette.swatches} /> : null}
+            {/* 基準からの距離。しきい値スライダーと同じ尺度なので、値の調整の目安にもなる。 */}
+            {distanceById ? (
+              <span className="text-[10px] text-muted-foreground tabular-nums">
+                {distanceById.has(photoId)
+                  ? `距離 ${distanceById.get(photoId)?.toFixed(3)}`
+                  : "基準"}
+              </span>
+            ) : null}
           </button>
         );
       })}

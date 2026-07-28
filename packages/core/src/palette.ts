@@ -603,6 +603,126 @@ export function groupByThreshold(
   return groups;
 }
 
+/** k-medoids の反復上限。medoid の移動は数回で止まるので、これで十分収束する。 */
+const MEDOID_MAX_ITERATIONS = 20;
+
+/**
+ * 写真をちょうど count 個のグループに分ける (k-medoids)。
+ *
+ * groupByThreshold は「近いペアを繋ぐ」ため、A〜B と B〜C が近いだけで
+ * A と C まで同じグループになる（連鎖）。こちらは代表写真 (medoid) からの
+ * 距離で割り当てるので連鎖せず、グループ数も指定した数に固定される。
+ *
+ * 乱数は使わない。最初の medoid は「全写真への距離の合計が最小の写真」、
+ * 以降は「既存の medoid から最も遠い写真」を順に選ぶ (farthest-first)。
+ * 同点は常に若い添字を採るので、同じ入力からは必ず同じ結果になる。
+ *
+ * @param count 望むグループ数。写真の枚数と 1 でクランプされる。また、距離 0 の
+ *              写真しか残っていない場合はそれ以上増やしても意味が無いので、
+ *              指定より少ないグループ数で返ることがある。
+ * @returns groupByThreshold と同じ形式・同じ並び順の photoId の配列の配列。
+ */
+export function groupByCount(
+  palettes: PhotoPalette[],
+  matrix: DistanceMatrix,
+  count: number,
+): string[][] {
+  const n = palettes.length;
+  if (n === 0) return [];
+  const k = Math.max(1, Math.min(Math.trunc(count), n));
+
+  // --- 初期 medoid の選択 (farthest-first)。
+  // 1 つ目は最も「中心的」な写真。以降は最寄りの medoid から最も遠い写真を足していく。
+  const medoids: number[] = [];
+  {
+    let central = 0;
+    let centralSum = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < n; i += 1) {
+      let sum = 0;
+      for (let j = 0; j < n; j += 1) sum += matrix[i][j];
+      if (sum < centralSum) {
+        centralSum = sum;
+        central = i;
+      }
+    }
+    medoids.push(central);
+  }
+  // 各写真から最寄りの medoid までの距離。medoid を足すたびに縮めて使い回す。
+  const nearestToMedoid = new Float64Array(n);
+  for (let i = 0; i < n; i += 1) nearestToMedoid[i] = matrix[medoids[0]][i];
+  while (medoids.length < k) {
+    let farthest = 0;
+    let farthestDistance = -1;
+    for (let i = 0; i < n; i += 1) {
+      if (nearestToMedoid[i] > farthestDistance) {
+        farthestDistance = nearestToMedoid[i];
+        farthest = i;
+      }
+    }
+    // 全写真が既存の medoid と距離 0（全部同じパレットなど）。これ以上足しても
+    // 空グループができるだけなので、少ないグループ数のまま打ち切る。
+    if (farthestDistance <= 0) break;
+    medoids.push(farthest);
+    for (let i = 0; i < n; i += 1) {
+      const d = matrix[farthest][i];
+      if (d < nearestToMedoid[i]) nearestToMedoid[i] = d;
+    }
+  }
+
+  // --- 割り当てと medoid の更新を、動かなくなるまで繰り返す (Voronoi 反復)。
+  const assignments = new Array<number>(n).fill(0);
+  for (let iteration = 0; iteration < MEDOID_MAX_ITERATIONS; iteration += 1) {
+    // 割り当て。距離が同じなら若い medoid を選び、結果を決定的にする。
+    for (let i = 0; i < n; i += 1) {
+      let best = 0;
+      let bestDistance = Number.POSITIVE_INFINITY;
+      for (let m = 0; m < medoids.length; m += 1) {
+        const d = matrix[i][medoids[m]];
+        if (d < bestDistance) {
+          bestDistance = d;
+          best = m;
+        }
+      }
+      assignments[i] = best;
+    }
+
+    // 更新。各グループ内で「他のメンバーへの距離の合計が最小の写真」を新しい medoid にする。
+    const members: number[][] = Array.from({ length: medoids.length }, () => []);
+    for (let i = 0; i < n; i += 1) members[assignments[i]].push(i);
+    let moved = false;
+    for (let m = 0; m < medoids.length; m += 1) {
+      if (members[m].length === 0) continue;
+      let best = medoids[m];
+      let bestSum = Number.POSITIVE_INFINITY;
+      for (const i of members[m]) {
+        let sum = 0;
+        for (const j of members[m]) sum += matrix[i][j];
+        if (sum < bestSum) {
+          bestSum = sum;
+          best = i;
+        }
+      }
+      if (best !== medoids[m]) {
+        medoids[m] = best;
+        moved = true;
+      }
+    }
+    // medoid が動かなければ、直前の割り当ても最新の medoid に対するものなので終わり。
+    if (!moved) break;
+  }
+
+  // --- groupByThreshold と同じ形へ整える。
+  const buckets: string[][] = Array.from({ length: medoids.length }, () => []);
+  for (let i = 0; i < n; i += 1) buckets[assignments[i]].push(palettes[i].photoId);
+  const groups = buckets.filter((bucket) => bucket.length > 0);
+  for (const group of groups) group.sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
+  groups.sort((x, y) => {
+    if (x.length !== y.length) return y.length - x.length;
+    return x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0;
+  });
+  return groups;
+}
+
 /**
  * 指定した写真に色味が近い写真を、近い順に返す。自分自身は含まない。
  *
