@@ -12,7 +12,9 @@ import {
   scanningAtom,
   selectedPathsAtom,
   skippedCountAtom,
+  uploadCheckStateAtom,
   uploadStateAtom,
+  type UploadCheckState,
 } from "../state/photos";
 
 /** Rust 側が送信 1 件ごとに発火するイベント名（`uploader.rs` と同じ値）。 */
@@ -31,21 +33,41 @@ export function usePhotoLibrary() {
   const [selectedPaths] = useAtom(selectedPathsAtom);
   const deselect = useSetAtom(deselectPathsAtom);
   const setUploadState = useSetAtom(uploadStateAtom);
+  const setUploadCheck = useSetAtom(uploadCheckStateAtom);
   const applyUploadResults = useSetAtom(applyUploadResultsAtom);
 
-  /** スクリーンショットを走査し直す。メタデータの無いものは Rust 側で除外済み。 */
+  /**
+   * スクリーンショットを走査し直す。メタデータの無いものは Rust 側で除外済み。
+   *
+   * 例外は必ずここで受け止める。呼び出し側が `void scan()` で捨てているため、
+   * ここで拾わないと失敗が画面にもコンソールにも残らず、
+   * 「一覧は出るのに送信済みが 0 件のまま」という原因不明の状態になる。
+   */
   const scan = useCallback(async () => {
     setScanning(true);
     try {
       const result = await call<ScanResult>("scan_photos");
       setPhotos(result.photos);
       setSkipped(result.skippedCount);
-      // 走査直後にハッシュを計算し、続けて送信済みかを一括で問い合わせる。
-      await refreshUploadState(result.photos, setPhotos);
+      // 走査直後にハッシュを計算し、続けて送信済みかを月ごとに問い合わせる。
+      await refreshUploadState(result.photos, setPhotos, setUploadCheck);
+    } catch (error) {
+      // 月ごとの失敗は refreshUploadState が拾うので、ここに来るのは走査自体の失敗。
+      setUploadCheck({
+        doneMonths: 0,
+        totalMonths: 0,
+        currentMonth: "",
+        failed: [
+          {
+            month: "",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        ],
+      });
     } finally {
       setScanning(false);
     }
-  }, [setPhotos, setScanning, setSkipped]);
+  }, [setPhotos, setScanning, setSkipped, setUploadCheck]);
 
   /**
    * 選択中の写真を AVIF に変換して送る。
@@ -126,7 +148,11 @@ export function useInitialPhotoScan(): void {
   useEffect(() => {
     if (hasScannedOnce) return;
     hasScannedOnce = true;
-    void scan();
+    // 失敗したらフラグを戻す。戻さないと、起動時に一度こけただけで
+    // プロセスが生きている限り二度と自動走査されなくなる。
+    void scan().catch(() => {
+      hasScannedOnce = false;
+    });
   }, [scan]);
 }
 
@@ -136,27 +162,69 @@ function fileNameOf(path: string): string {
   return index >= 0 ? path.slice(index + 1) : path;
 }
 
-/** ハッシュを計算し、サーバーに送信済みかを問い合わせて一覧に反映する。 */
+/**
+ * ハッシュを計算し、サーバーに送信済みかを問い合わせて一覧に反映する。
+ *
+ * 全写真を 1 回で処理せず、月（`YYYY-MM`）単位で新しい順に回す。理由は 3 つある。
+ * 1. 1 か月ぶんが終わるたびに画面へ反映されるので、枚数が多くても途中経過が見える
+ * 2. ある月で失敗しても他の月は判定できる（以前は 1 回の失敗で全月が未判定のままだった）
+ * 3. 1 リクエストのハッシュ数が減り、サーバー側の負荷とタイムアウトの risk が下がる
+ *
+ * 失敗した月は握り潰さず、呼び出し側へ返して画面に出す。
+ */
 async function refreshUploadState(
   photos: Photo[],
-  setPhotos: (photos: Photo[]) => void,
+  setPhotos: (update: (prev: Photo[]) => Photo[]) => void,
+  onProgress: (state: UploadCheckState) => void,
 ): Promise<void> {
   if (photos.length === 0) return;
 
-  const hashes = await call<PhotoHash[]>("hash_photos", {
-    paths: photos.map((photo) => photo.path),
+  // 月ごとに束ねる。month は走査時に Rust 側が入れている（`YYYY-MM`）。
+  const byMonth = new Map<string, Photo[]>();
+  for (const photo of photos) {
+    const bucket = byMonth.get(photo.month);
+    if (bucket) bucket.push(photo);
+    else byMonth.set(photo.month, [photo]);
+  }
+  // 新しい月から片付ける。直近の写真ほど「送ったか」を知りたいことが多いため。
+  const months = [...byMonth.keys()].sort().reverse();
+
+  const failed: UploadCheckState["failed"] = [];
+  for (let i = 0; i < months.length; i += 1) {
+    const month = months[i];
+    const target = byMonth.get(month) ?? [];
+    onProgress({ doneMonths: i, totalMonths: months.length, currentMonth: month, failed });
+
+    try {
+      const hashes = await call<PhotoHash[]>("hash_photos", {
+        paths: target.map((photo) => photo.path),
+      });
+      const byPath = new Map(hashes.map((entry) => [entry.path, entry.sha256]));
+
+      // 送信済み判定はハッシュの一括問い合わせ。CHECK_HASH_LIMIT での分割は Rust 側が受け持つ。
+      const uploaded = new Set(
+        await call<string[]>("check_uploaded", { hashes: hashes.map((entry) => entry.sha256) }),
+      );
+
+      // 他の月の判定結果を消さないよう、必ず直前の一覧から差分で作り直す。
+      const paths = new Set(target.map((photo) => photo.path));
+      setPhotos((prev) =>
+        prev.map((photo) => {
+          if (!paths.has(photo.path)) return photo;
+          const sha256 = byPath.get(photo.path) ?? null;
+          return { ...photo, sha256, uploaded: sha256 !== null && uploaded.has(sha256) };
+        }),
+      );
+    } catch (error) {
+      // 1 か月の失敗で残りを止めない。原因は画面に出す。
+      failed.push({ month, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  onProgress({
+    doneMonths: months.length,
+    totalMonths: months.length,
+    currentMonth: "",
+    failed,
   });
-  const byPath = new Map(hashes.map((entry) => [entry.path, entry.sha256]));
-
-  // 送信済み判定はハッシュの一括問い合わせ。分割は Rust 側が受け持つ。
-  const uploaded = new Set(
-    await call<string[]>("check_uploaded", { hashes: hashes.map((entry) => entry.sha256) }),
-  );
-
-  setPhotos(
-    photos.map((photo) => {
-      const sha256 = byPath.get(photo.path) ?? null;
-      return { ...photo, sha256, uploaded: sha256 !== null && uploaded.has(sha256) };
-    }),
-  );
 }

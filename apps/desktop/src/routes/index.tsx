@@ -22,6 +22,7 @@ import {
   selectedPhotosAtom,
   skippedCountAtom,
   togglePhotoAtom,
+  uploadCheckStateAtom,
   uploadStateAtom,
   uploadingAtom,
   visiblePhotosAtom,
@@ -45,6 +46,7 @@ function Index() {
   const scanning = useAtomValue(scanningAtom);
   const skippedCount = useAtomValue(skippedCountAtom);
   const [uploadState, setUploadState] = useAtom(uploadStateAtom);
+  const uploadCheck = useAtomValue(uploadCheckStateAtom);
   const uploading = useAtomValue(uploadingAtom);
 
   // 詳細（ⓘ）と拡大表示の対象。どちらも一時的な表示なので、アトムにせず画面に持つ。
@@ -105,6 +107,21 @@ function Index() {
             再走査
           </Button>
         </header>
+
+        {/* 送信済み判定の状況。以前はここが無く、失敗しても「送信済み 0 件」に見えていた。 */}
+        {uploadCheck && uploadCheck.currentMonth !== "" && (
+          <p className="shrink-0 border-b bg-muted/50 px-4 py-2 text-xs text-muted-foreground tabular-nums">
+            送信済みを確認中… {uploadCheck.currentMonth}（{uploadCheck.doneMonths}/
+            {uploadCheck.totalMonths} か月）
+          </p>
+        )}
+        {uploadCheck && uploadCheck.currentMonth === "" && uploadCheck.failed.length > 0 && (
+          <p className="shrink-0 border-b bg-destructive/10 px-4 py-2 text-xs text-destructive">
+            送信済みの確認に失敗しました
+            {uploadCheck.failed[0].month ? `（${uploadCheck.failed[0].month} ほか ` : "（"}
+            {uploadCheck.failed.length} 件）: {uploadCheck.failed[0].message}
+          </p>
+        )}
 
         {/* 何枚中の何枚が送れたのかは送信中いちばん知りたい情報なので、常に上に出す。 */}
         {uploadState && (
