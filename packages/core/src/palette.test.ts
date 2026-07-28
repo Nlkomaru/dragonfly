@@ -100,6 +100,22 @@ describe("extractPalette", () => {
     expect(swatches.reduce((sum, s) => sum + s.ratio, 0)).toBeCloseTo(1);
   });
 
+  it("drops the dark cluster and renormalises the rest", () => {
+    // 画面の半分が黒。k=5 のままだと黒が最大の代表色になってしまう。
+    const swatches = extractPalette(twoTone([0, 0, 0], [255, 0, 0], 200), "photo-dark");
+    expect(swatches.some((s) => s.ratio > 0 && s.hex === "#000000")).toBe(false);
+    // 黒を除いた残り（赤）だけで比率を割り直すので、赤が 100% になる。
+    expect(swatches[0].hex).toBe("#ff0000");
+    expect(swatches[0].ratio).toBeCloseTo(1);
+  });
+
+  it("keeps the dark colour when the whole image is dark", () => {
+    // 捨てると何も残らない場合は暗部こそがその写真の色なので、落とさない。
+    const swatches = extractPalette(solid(10, 10, 12, 100), "photo-night");
+    expect(swatches[0].ratio).toBeCloseTo(1);
+    expect(swatches[0].l).toBeLessThan(0.3);
+  });
+
   it("ignores transparent pixels", () => {
     const pixels = twoTone([255, 0, 0], [0, 0, 255], 100);
     // 後半（青）を透明にすると、赤だけが残るはず。

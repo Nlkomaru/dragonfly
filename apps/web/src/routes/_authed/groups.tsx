@@ -111,17 +111,34 @@ function GroupsPage() {
     setDraftThreshold(committedThreshold);
   }, [committedThreshold]);
 
-  // React の二重実行やしきい値変更で写真を取り直さないよう、開始したかどうかを持つ。
-  const startedRef = useRef(false);
+  // 再生成ボタンを押すたびに増える。これを deps にして、パイプラインを頭から回し直す。
+  const [runId, setRunId] = useState(0);
+  // その回で「保存済みを無視して全部抽出し直す」かどうか。
+  // state にすると再生成のたびに再描画が 1 回増えるだけなので、ref で持つ。
+  const forceRef = useRef(false);
+  // React の二重実行やしきい値変更で写真を取り直さないよう、着手した runId を覚えておく。
+  const startedRunRef = useRef(-1);
 
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
+    if (startedRunRef.current === runId) return;
+    startedRunRef.current = runId;
 
     let cancelled = false;
+    // 読み取りは 1 回だけ。以降この回の判断は force で固定し、ref はすぐ倒しておく。
+    const force = forceRef.current;
+    forceRef.current = false;
 
     void (async () => {
       try {
+        // 再生成では前回の結果が残っていると古い表示が混ざるので、まず全部戻す。
+        setErrorMessage(null);
+        setSkipped(0);
+        setUnsaved(0);
+        setProgress({ done: 0, total: 0 });
+        setMatrix(null);
+        setPalettes([]);
+        setPhase("loading");
+
         // 1) 写真を cursor で辿って集める。上限に当たったら打ち切る。
         const collected: ApiPhoto[] = [];
         let cursor: string | null = null;
@@ -154,10 +171,13 @@ function GroupsPage() {
 
         // 3) 未抽出、または抽出アルゴリズムが古い写真だけを抽出し直す。
         //    「新しい版」を降格させないよう、比較は < で行う。
-        const pending = photos.filter((photo) => {
-          const palette = stored.get(photo.id);
-          return !palette || palette.version < PALETTE_VERSION;
-        });
+        //    再生成のときは保存済みの内容を問わず全部やり直す。
+        const pending = force
+          ? photos
+          : photos.filter((photo) => {
+              const palette = stored.get(photo.id);
+              return !palette || palette.version < PALETTE_VERSION;
+            });
 
         if (pending.length > 0) {
           setPhase("extracting");
@@ -243,11 +263,17 @@ function GroupsPage() {
 
     return () => {
       cancelled = true;
-      // 中断したら開始フラグも戻す。こうしておかないと、同じインスタンスで effect が
+      // 中断したら着手済みの印も戻す。こうしておかないと、同じインスタンスで effect が
       // 貼り直されたとき（React の開発時の二重実行）に、中断済みの 1 回目だけが残って
-      // 永久に「読み込み中」で止まってしまう。deps は [] なので本番では 1 回きり。
-      startedRef.current = false;
+      // 永久に「読み込み中」で止まってしまう。
+      startedRunRef.current = -1;
     };
+  }, [runId]);
+
+  /** 保存済みのパレットを無視して、全部の写真を抽出し直す。 */
+  const regenerate = useCallback(() => {
+    forceRef.current = true;
+    setRunId((prev) => prev + 1);
   }, []);
 
   const photoById = useMemo(() => {
@@ -365,6 +391,19 @@ function GroupsPage() {
           />
           <span className="tabular-nums">{draftThreshold.toFixed(3)}</span>
         </label>
+
+        {/* 抽出アルゴリズムを変えたときや、結果に納得がいかないときの手動やり直し。
+            保存済みのパレットを無視して全部取り直すので、枚数ぶんの時間がかかる。 */}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={regenerate}
+          disabled={phase !== "ready" && phase !== "error"}
+          title="保存済みのパレットを捨てて、すべての写真から代表色を取り直します"
+        >
+          再生成
+        </Button>
 
         {phase === "ready" ? (
           <p className="text-xs text-muted-foreground tabular-nums">

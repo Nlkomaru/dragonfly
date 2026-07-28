@@ -14,9 +14,13 @@
  * 距離を比べられなくなる。同じ version のパレット同士は必ず同じ条件で抽出されている、
  * という前提で buildDistanceMatrix が使われるため、そこを崩すなら必ずこの値を上げること。
  */
-export const PALETTE_VERSION = 1;
+export const PALETTE_VERSION = 2;
 
-/** 1枚の写真から取り出す代表色の数。k-means の k と、保存される swatches の長さを兼ねる。 */
+/**
+ * 1枚の写真から取り出す代表色の数。保存される swatches の長さでもある。
+ * k-means の k はこれより 1 大きい（CLUSTER_COUNT）。暗部のクラスタを捨てるためで、
+ * 最終的に残る色数がこの値になる。
+ */
 export const PALETTE_SIZE = 5;
 
 /** 代表色 1 色分。hex は表示用、l/a/b は距離計算用で、同じ色を 2 通りに持っているだけ。 */
@@ -162,6 +166,49 @@ const MIN_ALPHA = 128;
 const MAX_ITERATIONS = 20;
 
 /**
+ * 実際にクラスタ化する数。欲しい色数より 1 つ多く取る（いわゆる k+1）。
+ *
+ * VRChat のスクリーンショットは夜のワールドや影が広く、暗部だけで画面のかなりを占める。
+ * k=5 のまま回すと 5 色のうち 1〜2 色が「ほぼ黒」に潰れ、写真の特徴が出なくなる。
+ * 6 クラスタ作って暗い 1 つを捨てることで、残る 5 色を実際の色味に使い切る。
+ */
+const CLUSTER_COUNT = PALETTE_SIZE + 1;
+
+/**
+ * 「黒」とみなす OKLab の明度 L の上限。
+ *
+ * OKLab の L は 0（黒）〜1（白）。sRGB のグレー 20% 程度がおよそ 0.30 なので、
+ * それより暗いものを暗部として扱う。この値を変えると代表色が変わるため、
+ * 変更時は PALETTE_VERSION を上げること。
+ */
+const BLACK_L_MAX = 0.3;
+
+/**
+ * 捨てるクラスタの番号を選ぶ。
+ *
+ * 第一候補は「BLACK_L_MAX より暗いクラスタのうち最も暗いもの」。
+ * ただし全画素が暗い写真（真っ暗なスクリーンショット）でそれを捨てると
+ * 残りが 0 画素になり、比率が全部 0 の無意味なパレットになってしまう。
+ * その場合は暗部こそがその写真の色なので捨てず、代わりに最も小さいクラスタを落とす。
+ */
+function pickDroppedCluster(centers: LabPoint[], counts: number[], total: number): number {
+  let darkest = -1;
+  for (let c = 0; c < centers.length; c += 1) {
+    if (centers[c].l >= BLACK_L_MAX) continue;
+    // 同じ明度なら若い番号を優先し、結果を決定的にする。
+    if (darkest < 0 || centers[c].l < centers[darkest].l) darkest = c;
+  }
+  if (darkest >= 0 && total - counts[darkest] > 0) return darkest;
+
+  // 暗いクラスタが無い（または捨てると何も残らない）ときは、最も小さいものを落とす。
+  let smallest = 0;
+  for (let c = 1; c < centers.length; c += 1) {
+    if (counts[c] < counts[smallest]) smallest = c;
+  }
+  return smallest;
+}
+
+/**
  * k-means++ で初期中心を選ぶ。
  * 通常の乱択より初期配置が散らばるので、少ない反復でも安定した結果になる。
  */
@@ -241,9 +288,10 @@ export function extractPalette(
   }
 
   const rand = mulberry32(hashSeed(seed));
-  const centers = pickInitialCenters(samples, PALETTE_SIZE, rand);
+  // 欲しい色数より 1 つ多くクラスタを作る。捨てる 1 つは収束後に決める。
+  const centers = pickInitialCenters(samples, CLUSTER_COUNT, rand);
   const assignments = new Array<number>(samples.length).fill(-1);
-  const counts = new Array<number>(PALETTE_SIZE).fill(0);
+  const counts = new Array<number>(CLUSTER_COUNT).fill(0);
 
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration += 1) {
     // --- 割り当て。距離が同じなら必ず若い中心を選び、結果を決定的にする。
@@ -269,14 +317,14 @@ export function extractPalette(
     if (!changed) break;
 
     // --- 更新。各クラスタの重心を新しい中心にする。
-    const sums = Array.from({ length: PALETTE_SIZE }, () => ({ l: 0, a: 0, b: 0 }));
+    const sums = Array.from({ length: CLUSTER_COUNT }, () => ({ l: 0, a: 0, b: 0 }));
     for (let i = 0; i < samples.length; i += 1) {
       const sum = sums[assignments[i]];
       sum.l += samples[i].l;
       sum.a += samples[i].a;
       sum.b += samples[i].b;
     }
-    for (let c = 0; c < PALETTE_SIZE; c += 1) {
+    for (let c = 0; c < CLUSTER_COUNT; c += 1) {
       if (counts[c] === 0) continue;
       centers[c] = {
         l: sums[c].l / counts[c],
@@ -286,7 +334,7 @@ export function extractPalette(
     }
 
     // --- 空クラスタの埋め直し。最も浮いている点を新しい中心にして遊ばせない。
-    for (let c = 0; c < PALETTE_SIZE; c += 1) {
+    for (let c = 0; c < CLUSTER_COUNT; c += 1) {
       if (counts[c] > 0) continue;
       let farthest = -1;
       let farthestDistance = 0;
@@ -319,13 +367,29 @@ export function extractPalette(
     counts[best] += 1;
   }
 
-  const swatches: PaletteSwatch[] = centers.map((center, c) => ({
-    hex: oklabToHex(center.l, center.a, center.b),
-    ratio: counts[c] / samples.length,
-    l: center.l,
-    a: center.a,
-    b: center.b,
-  }));
+  // --- k+1 のうち 1 つ（多くの場合は暗部）を捨てて、欲しい PALETTE_SIZE 色にする。
+  const dropped = pickDroppedCluster(centers, counts, samples.length);
+  // 比率は「捨てた後に残った画素」に対する割合にする。こうしないと合計が 1 に満たず、
+  // 暗い写真ほど全部の色が薄く見える、という比較しにくいパレットになる。
+  let remaining = 0;
+  for (let c = 0; c < CLUSTER_COUNT; c += 1) {
+    if (c !== dropped) remaining += counts[c];
+  }
+
+  const swatches: PaletteSwatch[] = [];
+  for (let c = 0; c < CLUSTER_COUNT; c += 1) {
+    if (c === dropped) continue;
+    const center = centers[c];
+    swatches.push({
+      hex: oklabToHex(center.l, center.a, center.b),
+      // remaining が 0 になるのは全画素が 1 クラスタに入っていて、かつそれを捨てられなかった
+      // 場合だけ（pickDroppedCluster が防いでいる）。念のため 0 除算にはしない。
+      ratio: remaining > 0 ? counts[c] / remaining : 0,
+      l: center.l,
+      a: center.a,
+      b: center.b,
+    });
+  }
 
   // ratio 降順。同率のときは OKLab の値で並べて、順序まで決定的にする。
   swatches.sort(
