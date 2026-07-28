@@ -54,3 +54,6 @@ export {
 
 export type { AppSettings } from "./settings";
 export { DEFAULT_SETTINGS } from "./settings";
+
+export type { ZipEntry } from "./zip";
+export { buildStoredZip, crc32 } from "./zip";
