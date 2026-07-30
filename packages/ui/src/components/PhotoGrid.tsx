@@ -29,6 +29,12 @@ export interface PhotoGridProps {
   /** 写真ごとのサムネイル URL を返す。未生成なら undefined。 */
   thumbnailSrcFor?: (photo: Photo) => string | undefined;
   /**
+   * 写真ごとの BlurHash を返す。無ければ null / undefined。
+   * Photo 型は BlurHash を持たない（サーバ側の ApiPhoto にしか無い）ので、
+   * thumbnailSrcFor と同じく引き当ては呼び出し側に任せる。
+   */
+  blurhashFor?: (photo: Photo) => string | null | undefined;
+  /**
    * 実際に描画している写真が変わったときに呼ぶ。
    * サムネイルの生成を「今見えている分」だけに絞るために使う
    * （全件を先に作っても待ち時間が前倒しになるだけなので）。
@@ -38,6 +44,13 @@ export interface PhotoGridProps {
   onInfo?: (photo: Photo) => void;
   /** 拡大表示の要求。閲覧モードではカードのクリック、選択モードでは拡大ボタンから。 */
   onPreview?: (photo: Photo) => void;
+  /** 削除の要求。渡したときだけカードに削除ボタンが出る。確認は呼び出し側で行う。 */
+  onDelete?: (photo: Photo) => void;
+  /**
+   * 写真ごとに削除ボタンを出すか。省略すると onDelete がある全カードに出る。
+   * デスクトップは「サーバー上の写真」を消すので、送信済みのものだけに出したい。
+   */
+  canDelete?: (photo: Photo) => boolean;
   /**
    * 選択 UI を出すか。既定 true（デスクトップ互換）。
    * false ならチェックボックス等を隠し、カードクリックで拡大表示する。
@@ -62,9 +75,12 @@ export function PhotoGrid({
   onToggle,
   onRangeSelect,
   thumbnailSrcFor,
+  blurhashFor,
   onVisiblePhotosChange,
   onInfo,
   onPreview,
+  onDelete,
+  canDelete,
   selectable = true,
   onNearEnd,
   className,
@@ -200,6 +216,7 @@ export function PhotoGrid({
                 key={photo.path}
                 photo={photo}
                 thumbnailSrc={thumbnailSrcFor?.(photo)}
+                blurhash={blurhashFor?.(photo)}
                 selected={resolvedSelected.has(photo.path)}
                 selectable={selectable}
                 onToggle={
@@ -207,6 +224,8 @@ export function PhotoGrid({
                 }
                 onInfo={onInfo}
                 onPreview={onPreview}
+                // canDelete が false を返す写真では、ボタンごと出さない。
+                onDelete={onDelete && (canDelete?.(photo) ?? true) ? onDelete : undefined}
               />
             );
           })}

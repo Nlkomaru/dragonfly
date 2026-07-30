@@ -1,8 +1,9 @@
 import type { MouseEvent, ReactNode } from "react";
 import type { Photo } from "@dragonfly/core";
-import { Check, ImageOff, Info, Maximize2 } from "lucide-react";
+import { Check, Info, Maximize2, Trash2 } from "lucide-react";
 
 import { cn } from "../lib/utils";
+import { BlurhashImage } from "./BlurhashImage";
 import { Checkbox } from "./ui/checkbox";
 
 export interface PhotoCardProps {
@@ -12,6 +13,11 @@ export interface PhotoCardProps {
    * 未生成のうちは undefined を渡すとスケルトンを出す。
    */
   thumbnailSrc?: string;
+  /**
+   * サムネイルが読み込まれるまで敷く BlurHash。
+   * Photo 自体は持っていないので（サーバ側の ApiPhoto にしか無い）、呼び出し側が渡す。
+   */
+  blurhash?: string | null;
   /** 選択中かどうか。閲覧専用 (selectable=false) では無視される。 */
   selected?: boolean;
   /**
@@ -27,6 +33,11 @@ export interface PhotoCardProps {
    */
   onPreview?: (photo: Photo) => void;
   /**
+   * 削除ボタン（右上のゴミ箱）。渡したときだけボタンを出す。
+   * 取り消しの確認は呼び出し側の責務で、ここでは押されたことを伝えるだけ。
+   */
+  onDelete?: (photo: Photo) => void;
+  /**
    * 選択 UI を出すか。既定は true（デスクトップ互換）。
    * false にするとチェックボックスと送信済みバッジを隠し、クリックで拡大表示する。
    */
@@ -38,10 +49,13 @@ export interface PhotoCardProps {
 function OverlayButton({
   label,
   onClick,
+  className,
   children,
 }: {
   label: string;
   onClick: () => void;
+  /** 破壊的な操作だけ色を変えたいので、hover の背景色などを上書きできるようにする。 */
+  className?: string;
   children: ReactNode;
 }) {
   return (
@@ -59,6 +73,7 @@ function OverlayButton({
         "opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
         "hover:bg-black/75 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80",
         "[&_svg]:size-3.5",
+        className,
       )}
     >
       {children}
@@ -77,10 +92,12 @@ function OverlayButton({
 export function PhotoCard({
   photo,
   thumbnailSrc,
+  blurhash,
   selected = false,
   onToggle,
   onInfo,
   onPreview,
+  onDelete,
   selectable = true,
   className,
 }: PhotoCardProps) {
@@ -124,21 +141,9 @@ export function PhotoCard({
         className,
       )}
     >
-      {thumbnailSrc ? (
-        <img
-          src={thumbnailSrc}
-          alt={photo.fileName}
-          loading="lazy"
-          decoding="async"
-          draggable={false}
-          className="size-full object-cover"
-        />
-      ) : (
-        // サムネイル生成待ち。読み込み中と分からない静止表示にはしない。
-        <div className="flex size-full animate-pulse items-center justify-center bg-muted">
-          <ImageOff className="size-6 text-muted-foreground/50" aria-hidden />
-        </div>
-      )}
+      {/* 読み込み待ち（サムネイル生成待ちを含む）の表示は BlurhashImage が持つ。
+          BlurHash があればぼかし、無ければこれまで通りスケルトンになる。 */}
+      <BlurhashImage src={thumbnailSrc} blurhash={blurhash} alt={photo.fileName} />
 
       {/* 選択チェックボックス。閲覧モードでは出さない。常時表示せず、選択中かホバー時のみ出す。 */}
       {selectable ? (
@@ -170,6 +175,13 @@ export function PhotoCard({
         {onInfo ? (
           <OverlayButton label="詳細" onClick={() => onInfo(photo)}>
             <Info aria-hidden />
+          </OverlayButton>
+        ) : null}
+
+        {/* 削除だけは取り返しが付かないので、ホバー時の色を他のボタンと変えて区別する。 */}
+        {onDelete ? (
+          <OverlayButton label="削除" onClick={() => onDelete(photo)} className="hover:bg-destructive">
+            <Trash2 aria-hidden />
           </OverlayButton>
         ) : null}
 

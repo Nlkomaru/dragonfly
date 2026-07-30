@@ -13,6 +13,26 @@ export const skippedCountAtom = atom(0);
 /** 走査中かどうか。走査中は再走査ボタンを止める。 */
 export const scanningAtom = atom(false);
 
+/** 一覧の出どころ。 */
+export type PhotosSource =
+  /** まだ何も読んでいない。 */
+  | "none"
+  /** 前回の走査結果（キャッシュ）を表示している。 */
+  | "cache"
+  /** 今回の走査で確定した一覧を表示している。 */
+  | "scan";
+
+/**
+ * 一覧の出どころ。
+ *
+ * 起動直後はキャッシュを先に描くので、そのままだと「消したはずの写真がまだ居る」
+ * ような状態を確定した一覧と見分けられない。ヘッダーに出すためだけに持つ。
+ */
+export const photosSourceAtom = atom<PhotosSource>("none");
+
+/** 走査の進捗（Rust の `scan_progress` イベント）。null なら進捗待ち。 */
+export const scanProgressAtom = atom<{ processed: number; total: number } | null>(null);
+
 /** 送信済み判定の進行状況。null なら実行していない。 */
 export interface UploadCheckState {
   /** 判定が終わった月の数。 */
@@ -143,6 +163,20 @@ export const applyUploadResultsAtom = atom(
     );
   },
 );
+
+/**
+ * リモート（サーバー側）の写真を消したことを一覧に反映する。
+ *
+ * 消したのはサーバーの行だけで、ローカルのファイルはそのまま残るので、
+ * 写真自体は一覧に残したまま送信済みの印だけを外す（また送れる状態に戻す）。
+ * sha256 はファイルが変わっていない限り有効なので消さない。
+ */
+export const markRemoteDeletedAtom = atom(null, (get, set, path: string) => {
+  set(
+    photosAtom,
+    get(photosAtom).map((photo) => (photo.path === path ? { ...photo, uploaded: false } : photo)),
+  );
+});
 
 /** 選択を全て解除する。 */
 export const clearSelectionAtom = atom(null, (_get, set) => {

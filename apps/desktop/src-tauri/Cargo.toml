@@ -36,6 +36,10 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # 速度が必要なら nasm を用意したうえで features = ["asm"] を足す。
 ravif = { version = "0.11", default-features = false, features = ["threading"] }
 rgb = "0.8"              # ravif に渡す画素型
+# 一覧の読み込み前に出すプレースホルダ (BlurHash) の計算。
+# 成分数は @dragonfly/core の BLURHASH_COMPONENTS_X / Y と必ず同じ値にすること。
+# image / gdk-pixbuf 連携の機能は使わないので既定のまま（どちらも既定で無効）。
+blurhash = "0.2"
 # ハッシュキャッシュ。bundled でシステムの libsqlite3 に依存しない。
 rusqlite = { version = "0.32", features = ["bundled"] }
 # HTTP。既定機能はシステム OpenSSL を引くため rustls に固定する。

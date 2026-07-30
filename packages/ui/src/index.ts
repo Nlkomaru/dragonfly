@@ -39,6 +39,7 @@ export { Separator } from "./components/ui/separator";
 export { Toaster, toast } from "./components/ui/sonner";
 
 // dragonfly 固有の複合コンポーネント
+export { BlurhashImage, type BlurhashImageProps } from "./components/BlurhashImage";
 export { EmptyState, type EmptyStateProps } from "./components/EmptyState";
 export {
   FilterCombobox,

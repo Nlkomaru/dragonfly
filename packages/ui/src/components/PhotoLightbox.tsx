@@ -1,6 +1,16 @@
 import { useEffect, useState } from "react";
 import type { Photo } from "@dragonfly/core";
-import { ChevronLeft, ChevronRight, Clock, Globe, Loader2, Tag, Users, X } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Globe,
+  Loader2,
+  Tag,
+  Trash2,
+  Users,
+  X,
+} from "lucide-react";
 
 import { formatTakenAt } from "../lib/format";
 import { cn } from "../lib/utils";
@@ -20,6 +30,11 @@ export interface PhotoLightboxProps {
   /** 前後の写真へ移動する。渡さなければ矢印を出さない。 */
   onPrev?: () => void;
   onNext?: () => void;
+  /**
+   * 削除の要求。渡したときだけ、閉じるボタンの隣にゴミ箱を出す。
+   * 確認ダイアログは呼び出し側の責務で、ここでは押されたことを伝えるだけ。
+   */
+  onDelete?: () => void;
   /**
    * 情報パネルを出すかどうか。true にすると画像を左上に寄せ、
    * 右と下に撮影情報・タグを並べる（Web ギャラリー向け）。
@@ -49,6 +64,7 @@ export function PhotoLightbox({
   imageSrc,
   onPrev,
   onNext,
+  onDelete,
   showInfo = false,
   tags = [],
   onTagsChange,
@@ -131,17 +147,38 @@ export function PhotoLightbox({
             </NavButton>
           ) : null}
 
-          <button
-            type="button"
-            aria-label="閉じる"
-            onClick={(event) => {
-              event.stopPropagation();
-              onOpenChange(false);
-            }}
-            className="absolute top-4 right-4 rounded-full p-2 text-white/80 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-          >
-            <X className="size-5" aria-hidden />
-          </button>
+          {/* 右上のボタン列。削除と閉じるを 1 本にまとめ、
+              削除の有無で閉じるボタンの位置が動かないようにする。 */}
+          <div className="absolute top-4 right-4 flex items-center gap-1">
+            {onDelete ? (
+              <button
+                type="button"
+                aria-label="削除"
+                title="削除"
+                onClick={(event) => {
+                  // 画像エリアのクリック（＝閉じる）に飲まれると、
+                  // 呼び出し側の確認ダイアログを出す前に閉じてしまう。
+                  event.stopPropagation();
+                  onDelete();
+                }}
+                className="rounded-full p-2 text-white/80 transition-colors hover:bg-destructive hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              >
+                <Trash2 className="size-5" aria-hidden />
+              </button>
+            ) : null}
+
+            <button
+              type="button"
+              aria-label="閉じる"
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenChange(false);
+              }}
+              className="rounded-full p-2 text-white/80 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+            >
+              <X className="size-5" aria-hidden />
+            </button>
+          </div>
 
           {/* 情報パネルが無いときだけ、どの写真か分かるようファイル名を重ねる。 */}
           {!showInfo ? (

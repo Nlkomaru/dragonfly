@@ -22,6 +22,19 @@ const ENCODE_SPEED: u8 = 6;
 /// サムネイルは更に速度優先で良い。
 const THUMBNAIL_SPEED: u8 = 10;
 
+/// BlurHash の成分数（横 / 縦）。
+///
+/// **`packages/core/src/blurhash.ts` の `BLURHASH_COMPONENTS_X` / `_Y` と同じ値であること。**
+/// web 側は既存写真のサムネイルから同じハッシュを後追いで計算するため、
+/// ここがずれると同じ写真でもプレースホルダの見た目が変わってしまう。
+const BLURHASH_COMPONENTS_X: u32 = 4;
+const BLURHASH_COMPONENTS_Y: u32 = 3;
+
+/// BlurHash 計算用に落とす長辺（px）。
+/// 数個の低周波成分しか持たない形式なので、これ以上大きくしても結果はほぼ変わらず、
+/// 計算量（成分数 × 画素数）だけが増える。
+const BLURHASH_LONG_EDGE: u32 = 64;
+
 /// 1枚分の変換結果。
 #[derive(Debug, Clone)]
 pub struct ConvertedPhoto {
@@ -32,6 +45,8 @@ pub struct ConvertedPhoto {
     /// 縮小後の解像度。サーバーへ送るメタデータに使う。
     pub width: u32,
     pub height: u32,
+    /// 読み込み前に出すプレースホルダ用の BlurHash。計算できなければ None。
+    pub blurhash: Option<String>,
 }
 
 /// 変換の進捗。
@@ -65,6 +80,27 @@ fn encode_avif(rgba: &image::RgbaImage, quality: u8, speed: u8) -> Result<Vec<u8
         .encode_rgba(img)
         .map_err(|e| format!("AVIF encoding failed: {e}"))?;
     Ok(encoded.avif_file)
+}
+
+/// RGBA8 のバッファから BlurHash を計算する。
+///
+/// 幅・高さは必ず「渡すバッファ自身」から取ること。blurhash クレートは
+/// `width * height * 4` より短いバッファを渡してもエラーにならず、
+/// 添字外アクセスで panic する（引数の食い違いが実行時まで表に出ない）。
+fn compute_blurhash(rgba: &image::RgbaImage) -> Option<String> {
+    // 元が既に十分小さければ縮小しない。fit_long_edge はその場合 None を返す。
+    let source = match fit_long_edge(rgba.width(), rgba.height(), BLURHASH_LONG_EDGE) {
+        Some((w, h)) => image::imageops::resize(rgba, w, h, FilterType::Triangle),
+        None => rgba.clone(),
+    };
+    blurhash::encode(
+        BLURHASH_COMPONENTS_X,
+        BLURHASH_COMPONENTS_Y,
+        source.width(),
+        source.height(),
+        source.as_raw(),
+    )
+    .ok()
 }
 
 /// `[u8]` を `[RGBA8]` として読み替える。どちらも 1 バイト境界の POD なので安全に変換できる。
@@ -102,6 +138,11 @@ pub fn convert_png(
     };
     let mut thumbnail = encode_avif(&thumb_source, quality.min(60), THUMBNAIL_SPEED)?;
 
+    // BlurHash はサムネイル用に縮小済みのバッファから求める。ここで元画像を
+    // 読み直すと 4K PNG のデコードがもう一度走ってしまう。
+    // 失敗してもプレースホルダが出ないだけで写真自体は送れるので、変換は成功させる。
+    let blurhash = compute_blurhash(&thumb_source);
+
     if let Some(json) = vrcx_json {
         let xmp = build_xmp_packet(json);
         // 埋め込みに失敗しても画像は有効なので、その場合は元のバイト列を使う。
@@ -119,6 +160,7 @@ pub fn convert_png(
         thumbnail,
         width,
         height,
+        blurhash,
     })
 }
 
@@ -154,6 +196,15 @@ mod tests {
             converted.image.len(),
             converted.thumbnail.len()
         );
+    }
+
+    #[test]
+    fn blurhash_is_computed_from_a_solid_image() {
+        let image = image::RgbaImage::from_pixel(120, 80, image::Rgba([12, 34, 56, 255]));
+        let hash = compute_blurhash(&image).unwrap();
+        // 4x3 成分なら長さは 6 + 2 * (4 * 3 - 1) = 28 文字に決まる。
+        // ここが変わったら JS 側の成分数とずれている。
+        assert_eq!(hash.len(), 28);
     }
 
     #[test]

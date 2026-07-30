@@ -28,6 +28,12 @@ export interface UploadPhotoMetadata {
   /** AVIF 変換で失われるため、抽出済みの VRCX メタデータをそのまま送る。 */
   vrcx: VrcxMetadata;
   tags?: string[];
+  /**
+   * 一覧のプレースホルダに使う BlurHash。
+   * デスクトップが変換のついでに計算できたときだけ載せるので optional。
+   * 省略された写真は、後から Web クライアントがサムネイルを見て埋める。
+   */
+  blurhash?: string;
 }
 
 export interface UploadPhotoResponse {
@@ -91,6 +97,11 @@ export interface ApiPhoto {
   world: WorldRef | null;
   players: PlayerRef[];
   tags: string[];
+  /**
+   * 画像が読み込まれるまでのプレースホルダに使う BlurHash。
+   * 計算前の写真や、BlurHash を持たない頃にアップロードされた古い写真では null。
+   */
+  blurhash: string | null;
 }
 
 /** 写真 1 枚のタグを置き換える要求。ここに無いタグはその写真から外れる。 */
@@ -182,6 +193,35 @@ export interface PutPalettesRequest {
 }
 
 export interface PutPalettesResponse {
+  /** 実際に保存できた件数。自分の写真でないものは黙って捨てるため、要求より減ることがある。 */
+  saved: number;
+}
+
+/**
+ * 1リクエストで保存できる BlurHash 数の上限。超える分はクライアントが分割する。
+ * パレットより大きくできるのは、1 件が 28 文字の文字列だけでボディが軽いため。
+ */
+export const BLURHASH_PUT_LIMIT = 100;
+
+/**
+ * 写真 1 枚分の BlurHash。
+ *
+ * デスクトップからのアップロード時に載ってくるのが本来の経路だが、
+ * それより前にアップロードされた写真は blurhash を持たない。
+ * それらは Web クライアントがサムネイルから計算して後から埋める（パレットと同じ後追い方式）。
+ * サーバーは受け取った値を持つだけで、計算はしない。
+ */
+export interface ApiPhotoBlurhash {
+  photoId: string;
+  blurhash: string;
+}
+
+/** BlurHash の一括保存（upsert）。最大 BLURHASH_PUT_LIMIT 件。 */
+export interface PutBlurhashesRequest {
+  blurhashes: ApiPhotoBlurhash[];
+}
+
+export interface PutBlurhashesResponse {
   /** 実際に保存できた件数。自分の写真でないものは黙って捨てるため、要求より減ることがある。 */
   saved: number;
 }

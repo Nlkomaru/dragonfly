@@ -43,3 +43,8 @@ export const WithInfo: Story = {
     tagSuggestions: ["集合写真", "夜景", "friends+", "ワールド巡り"],
   },
 };
+
+/** 削除できる状態。閉じるボタンの隣にゴミ箱が並ぶ。確認は呼び出し側が出す。 */
+export const WithDelete: Story = {
+  args: { onPrev: () => {}, onNext: () => {}, onDelete: () => {} },
+};

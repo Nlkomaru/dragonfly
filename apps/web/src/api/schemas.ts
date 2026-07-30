@@ -4,7 +4,12 @@
 // ここが食い違うと実行時にしか気付けない。それを避けるため、ファイル末尾で
 // 「zod から推論した型が core の型に代入できるか」をコンパイル時に検査している。
 
-import { CHECK_HASH_LIMIT, PALETTE_PUT_LIMIT, PALETTE_SIZE } from "@dragonfly/core";
+import {
+  BLURHASH_PUT_LIMIT,
+  CHECK_HASH_LIMIT,
+  PALETTE_PUT_LIMIT,
+  PALETTE_SIZE,
+} from "@dragonfly/core";
 import type {
   ApiPhoto,
   CheckPhotosRequest,
@@ -14,6 +19,8 @@ import type {
   ListPhotosResponse,
   ListTagsResponse,
   MeResponse,
+  PutBlurhashesRequest,
+  PutBlurhashesResponse,
   PutPalettesRequest,
   PutPalettesResponse,
   PutPhotoTagsRequest,
@@ -28,6 +35,20 @@ const sha256Schema = z
   .string()
   .regex(/^[0-9a-f]{64}$/, "must be a lowercase hex sha-256")
   .meta({ description: "変換前 PNG の SHA-256", example: "a".repeat(64) });
+
+/**
+ * BlurHash の文字列。4x3 成分なら 28 文字だが、成分数が変わっても弾かないよう幅を持たせる。
+ * 上限を付けるのは、この値がそのまま D1 の 1 列に入るため（無制限だと行が際限なく膨らむ）。
+ * 妥当性そのものは表示側の isValidBlurhash が見るので、ここでは長さだけを見る。
+ */
+const blurhashSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .meta({
+    description: "読み込み前のプレースホルダに使う BlurHash",
+    example: "LTFi4E2|sYo$zOR:jujJeqf7fQf7",
+  });
 
 export const WorldRefSchema = z.object({
   id: z.string().meta({ description: "VRChat のワールド ID", example: "wrld_00000000" }),
@@ -69,6 +90,8 @@ export const UploadPhotoMetadataSchema = z.object({
   // ワールドと同席者が無い写真は検索できないため受け付けない。
   vrcx: VrcxMetadataSchema,
   tags: z.array(z.string()).optional(),
+  // デスクトップが変換のついでに計算できたときだけ載る。無ければ後から Web 側が埋める。
+  blurhash: blurhashSchema.optional(),
 });
 
 /** 1つのタグに許す最大文字数。`packages/ui` の TagEditor と同じ値。 */
@@ -157,6 +180,36 @@ export const PutPalettesResponseSchema = z.object({
     .meta({ description: "実際に保存できた件数。自分の写真でないものは含まれない" }),
 });
 
+// ---------------------------------------------------------------------------
+// BlurHash
+// ---------------------------------------------------------------------------
+
+/**
+ * 写真 1 枚分の BlurHash。
+ * アップロード時に載らなかった写真を、Web クライアントが後から埋めるのに使う。
+ */
+export const ApiPhotoBlurhashSchema = z.object({
+  // パレットと同じ理由で長さの上限を付ける。この ID がそのまま inArray の束縛値として
+  // D1 へ渡るので、無制限だと 1 本の SQL が際限なく膨らむ。UUIDv7 は 36 文字。
+  photoId: z.string().min(1).max(64).meta({ description: "写真の ID (UUIDv7)" }),
+  blurhash: blurhashSchema,
+});
+
+/** PUT /blurhashes のボディ。同じ photoId を重ねて送られても、保存されるのは 1 行。 */
+export const PutBlurhashesRequestSchema = z.object({
+  blurhashes: z
+    .array(ApiPhotoBlurhashSchema)
+    .max(BLURHASH_PUT_LIMIT)
+    .meta({ description: `保存する BlurHash。最大 ${BLURHASH_PUT_LIMIT} 件` }),
+});
+
+export const PutBlurhashesResponseSchema = z.object({
+  saved: z
+    .number()
+    .int()
+    .meta({ description: "実際に保存できた件数。自分の写真でないものは含まれない" }),
+});
+
 export const ListTagsResponseSchema = z.object({
   tags: z.array(z.string()).meta({ description: "このユーザーが使ったことのあるタグ名" }),
 });
@@ -238,6 +291,10 @@ export const ApiPhotoSchema = z.object({
   world: WorldRefSchema.nullable(),
   players: z.array(PlayerRefSchema),
   tags: z.array(z.string()),
+  blurhash: z
+    .string()
+    .nullable()
+    .meta({ description: "読み込み前のプレースホルダ。未計算や古い写真では null" }),
 });
 
 export const ListPhotosResponseSchema = z.object({
@@ -277,4 +334,12 @@ type _PutPalettesRequest = Assignable<z.infer<typeof PutPalettesRequestSchema>, 
 type _PutPalettesResponse = Assignable<
   z.infer<typeof PutPalettesResponseSchema>,
   PutPalettesResponse
+>;
+type _PutBlurhashesRequest = Assignable<
+  z.infer<typeof PutBlurhashesRequestSchema>,
+  PutBlurhashesRequest
+>;
+type _PutBlurhashesResponse = Assignable<
+  z.infer<typeof PutBlurhashesResponseSchema>,
+  PutBlurhashesResponse
 >;

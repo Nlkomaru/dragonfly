@@ -8,7 +8,10 @@ import type { Photo, ScanResult, UploadProgress, UploadSummary } from "@dragonfl
 import {
   applyUploadResultsAtom,
   deselectPathsAtom,
+  markRemoteDeletedAtom,
   photosAtom,
+  photosSourceAtom,
+  scanProgressAtom,
   scanningAtom,
   selectedPathsAtom,
   skippedCountAtom,
@@ -20,10 +23,45 @@ import {
 /** Rust 側が送信 1 件ごとに発火するイベント名（`uploader.rs` と同じ値）。 */
 const UPLOAD_PROGRESS_EVENT = "upload_progress";
 
+/** Rust 側が走査中に発火するイベント名（`scanner.rs` の `SCAN_PROGRESS_EVENT` と同じ値）。 */
+const SCAN_PROGRESS_EVENT = "scan_progress";
+
 /** Rust の `hash_photos` が返す1件分。 */
 interface PhotoHash {
   path: string;
   sha256: string;
+}
+
+/** `scan_progress` イベントの中身（`scanner.rs` の `ScanProgress`）。 */
+interface ScanProgress {
+  processed: number;
+  total: number;
+  currentPath: string;
+}
+
+/** キャッシュ更新コマンドに渡す送信状態 1 件分（`scan_cache.rs` の `UploadStateEntry`）。 */
+interface UploadStateEntry {
+  path: string;
+  sha256: string | null;
+  uploaded: boolean;
+}
+
+/**
+ * 走査結果に、直前の一覧が持っていた sha256 / uploaded を引き継ぐ。
+ *
+ * 走査は毎回 `sha256: null` / `uploaded: false` の写真を返すため、そのまま入れ替えると
+ * キャッシュから復元した送信済みバッジが走査完了の瞬間に一度全部消えてしまう。
+ * 同じパスなら同じ写真として扱い、直後の送信済み判定で上書きされるまで前の値を見せる。
+ * （パスはそのままに中身が差し替わった写真は一時的に古いハッシュを持つが、
+ *   数秒後の判定で直るので、バッジが消えて見えるより害が小さい。）
+ */
+function carryUploadState(previous: Photo[], scanned: Photo[]): Photo[] {
+  const byPath = new Map(previous.map((photo) => [photo.path, photo]));
+  return scanned.map((photo) => {
+    const before = byPath.get(photo.path);
+    if (!before) return photo;
+    return { ...photo, sha256: before.sha256, uploaded: before.uploaded };
+  });
 }
 
 export function usePhotoLibrary() {
@@ -35,6 +73,29 @@ export function usePhotoLibrary() {
   const setUploadState = useSetAtom(uploadStateAtom);
   const setUploadCheck = useSetAtom(uploadCheckStateAtom);
   const applyUploadResults = useSetAtom(applyUploadResultsAtom);
+  const setPhotosSource = useSetAtom(photosSourceAtom);
+  const setScanProgress = useSetAtom(scanProgressAtom);
+  const markRemoteDeleted = useSetAtom(markRemoteDeletedAtom);
+
+  /**
+   * 前回の走査結果（Rust 側のキャッシュ）をそのまま一覧に出す。
+   *
+   * 走査は数千枚あると数秒かかり、その間ずっと一覧が空になってしまうので、
+   * 起動直後の見た目だけを先に埋めるために使う。表示を速くするためだけの仕組みなので、
+   * 失敗しても画面にエラーを出さず、そのまま本物の走査に進む。
+   */
+  const restoreFromCache = useCallback(async () => {
+    try {
+      const cached = await call<ScanResult>("cached_photos");
+      // キャッシュが無い初回起動は空で返る。空で上書きしても得るものが無いので何もしない。
+      if (cached.photos.length === 0) return;
+      setPhotos(cached.photos);
+      setSkipped(cached.skippedCount);
+      setPhotosSource("cache");
+    } catch (error) {
+      console.warn("could not restore the scan cache", error);
+    }
+  }, [setPhotos, setSkipped, setPhotosSource]);
 
   /**
    * スクリーンショットを走査し直す。メタデータの無いものは Rust 側で除外済み。
@@ -45,10 +106,18 @@ export function usePhotoLibrary() {
    */
   const scan = useCallback(async () => {
     setScanning(true);
+    setScanProgress(null);
+    // 走査中だけ進捗を購読する。何枚中の何枚まで見たのかが分からないと、
+    // キャッシュを出している間「止まっているのか進んでいるのか」が判断できない。
+    const stop = subscribe<ScanProgress>(SCAN_PROGRESS_EVENT, (progress) => {
+      setScanProgress({ processed: progress.processed, total: progress.total });
+    });
     try {
       const result = await call<ScanResult>("scan_photos");
-      setPhotos(result.photos);
+      // 走査結果は送信済みの情報を持たないので、直前の一覧から引き継いでから置き換える。
+      setPhotos((prev) => carryUploadState(prev, result.photos));
       setSkipped(result.skippedCount);
+      setPhotosSource("scan");
       // 走査直後にハッシュを計算し、続けて送信済みかを月ごとに問い合わせる。
       await refreshUploadState(result.photos, setPhotos, setUploadCheck);
     } catch (error) {
@@ -65,9 +134,33 @@ export function usePhotoLibrary() {
         ],
       });
     } finally {
+      stop();
+      setScanProgress(null);
       setScanning(false);
     }
-  }, [setPhotos, setScanning, setSkipped, setUploadCheck]);
+  }, [setPhotos, setScanning, setScanProgress, setSkipped, setPhotosSource, setUploadCheck]);
+
+  /**
+   * サーバー側にあるこの写真を削除する。ローカルのスクリーンショットは消さない。
+   *
+   * サーバー上の行はハッシュで引く（デスクトップは写真の ID を持たないため）。
+   * 確認は呼び出し側で済ませてから呼ぶこと。失敗は throw するので画面側で理由を出す。
+   */
+  const deleteRemote = useCallback(
+    async (photo: Photo) => {
+      // ハッシュは送信済み判定と同時に入るので uploaded な写真には必ずあるが、
+      // 無いまま Rust に渡すと「hex ではない」という分かりにくい理由で落ちる。
+      if (!photo.sha256) {
+        throw new Error("ハッシュが未計算のため削除できません。再走査してからお試しください。");
+      }
+      await call<void>("delete_remote_photo", { sha256: photo.sha256 });
+      markRemoteDeleted(photo.path);
+      // キャッシュ側も戻す。戻さないと次の起動で送信済みバッジが復活してしまう。
+      // sha256 はそのまま残す（ローカルのファイルは変わっていないため、次回も使える）。
+      await updateScanCache([{ path: photo.path, sha256: photo.sha256, uploaded: false }]);
+    },
+    [markRemoteDeleted],
+  );
 
   /**
    * 選択中の写真を AVIF に変換して送る。
@@ -118,6 +211,14 @@ export function usePhotoLibrary() {
       });
       // 成功したものだけ選択から外す。失敗した写真は選び直さずに再送できるよう残す。
       deselect(summary.results.filter((r) => r.uploaded).map((r) => r.path));
+      // 送れたものはキャッシュにも反映する。次の起動でバッジが出ないと、
+      // 送信済み判定が終わるまで「送ったはずなのに送れていない」ように見えてしまう。
+      // 失敗した写真は含めない（ハッシュが取れておらず、既存の値を消してしまうため）。
+      await updateScanCache(
+        summary.results
+          .filter((result) => result.uploaded)
+          .map((result) => ({ path: result.path, sha256: result.sha256, uploaded: true })),
+      );
     } catch (error) {
       // コマンド自体が落ちた場合（鍵未設定など）。件数は分からないので理由だけ残す。
       setUploadState({
@@ -133,7 +234,7 @@ export function usePhotoLibrary() {
     }
   }, [selectedPaths, deselect, setUploadState, applyUploadResults]);
 
-  return { photos, scanning, scan, upload };
+  return { photos, scanning, scan, upload, deleteRemote, restoreFromCache };
 }
 
 /**
@@ -143,17 +244,37 @@ export function usePhotoLibrary() {
 let hasScannedOnce = false;
 
 export function useInitialPhotoScan(): void {
-  const { scan } = usePhotoLibrary();
+  const { scan, restoreFromCache } = usePhotoLibrary();
 
   useEffect(() => {
     if (hasScannedOnce) return;
     hasScannedOnce = true;
     // 失敗したらフラグを戻す。戻さないと、起動時に一度こけただけで
     // プロセスが生きている限り二度と自動走査されなくなる。
-    void scan().catch(() => {
+    void (async () => {
+      // キャッシュを先に描いてから走査する。並べて走らせると、走査の方が先に
+      // 終わったときに古いキャッシュで新しい一覧を上書きしてしまう。
+      await restoreFromCache();
+      await scan();
+    })().catch(() => {
       hasScannedOnce = false;
     });
-  }, [scan]);
+  }, [scan, restoreFromCache]);
+}
+
+/**
+ * 送信状態を走査キャッシュへ書き戻す。次の起動でバッジが最初から正しく出るようにする。
+ *
+ * キャッシュに行が無いパスは Rust 側で無視されるため、必ず `scan_photos` の完了後に呼ぶ。
+ * 表示には影響しないので、失敗しても警告に留めて処理を続ける。
+ */
+async function updateScanCache(entries: UploadStateEntry[]): Promise<void> {
+  if (entries.length === 0) return;
+  try {
+    await call<void>("update_scan_cache_upload_state", { entries });
+  } catch (error) {
+    console.warn("could not update the scan cache", error);
+  }
 }
 
 /** 絶対パスから表示用のファイル名だけを取り出す（Windows / POSIX の両方の区切りに対応）。 */
@@ -206,15 +327,23 @@ async function refreshUploadState(
         await call<string[]>("check_uploaded", { hashes: hashes.map((entry) => entry.sha256) }),
       );
 
+      // この月の確定値。画面とキャッシュの両方に同じものを流す。
+      const entries: UploadStateEntry[] = target.map((photo) => {
+        const sha256 = byPath.get(photo.path) ?? null;
+        return { path: photo.path, sha256, uploaded: sha256 !== null && uploaded.has(sha256) };
+      });
+      const byEntryPath = new Map(entries.map((entry) => [entry.path, entry]));
+
       // 他の月の判定結果を消さないよう、必ず直前の一覧から差分で作り直す。
-      const paths = new Set(target.map((photo) => photo.path));
       setPhotos((prev) =>
         prev.map((photo) => {
-          if (!paths.has(photo.path)) return photo;
-          const sha256 = byPath.get(photo.path) ?? null;
-          return { ...photo, sha256, uploaded: sha256 !== null && uploaded.has(sha256) };
+          const entry = byEntryPath.get(photo.path);
+          if (!entry) return photo;
+          return { ...photo, sha256: entry.sha256, uploaded: entry.uploaded };
         }),
       );
+      // 次の起動でキャッシュから復元したときも、この判定結果をそのまま出せるようにする。
+      await updateScanCache(entries);
     } catch (error) {
       // 1 か月の失敗で残りを止めない。原因は画面に出す。
       failed.push({ month, message: error instanceof Error ? error.message : String(error) });
