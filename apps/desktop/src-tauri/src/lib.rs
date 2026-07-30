@@ -5,6 +5,7 @@ pub mod avif_meta;
 pub mod converter;
 pub mod hash;
 pub mod metadata;
+pub mod scan_cache;
 pub mod scanner;
 pub mod settings;
 pub mod thumbnails;
@@ -48,11 +49,15 @@ pub fn run() {
             settings::clear_api_key,
             settings::pick_screenshot_dir,
             scanner::scan_photos,
+            scan_cache::cached_photos,
+            scan_cache::update_scan_cache_upload_state,
+            scan_cache::clear_scan_cache,
             hash::hash_photos,
             thumbnails::thumbnail_paths,
             uploader::check_uploaded,
             uploader::upload_photos,
             uploader::test_connection,
+            uploader::delete_remote_photo,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

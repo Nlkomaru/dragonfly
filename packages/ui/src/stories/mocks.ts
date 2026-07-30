@@ -1,5 +1,6 @@
 // Storybook 専用のモックデータ。アプリのバンドルには含めない（index.ts から export しない）。
 import type { Photo } from "@dragonfly/core";
+import { encodeBlurhash } from "@dragonfly/core";
 
 /** 実在しそうな日本語ワールド名。 */
 const WORLDS = [
@@ -63,12 +64,68 @@ export function makePhotos(count: number): Photo[] {
   return Array.from({ length: count }, (_, index) => makePhoto(index));
 }
 
+/** index ごとの色相。サムネイルと BlurHash で同じ色を使うために切り出す。 */
+function hueOf(index: number): number {
+  return (index * 37) % 360;
+}
+
 /**
  * ネットワークに出ないサムネイル代わりの SVG データ URI。
  * index ごとに色相を変えて、グリッドのスクロールが分かるようにする。
  */
 export function mockThumbnail(index: number): string {
-  const hue = (index * 37) % 360;
+  const hue = hueOf(index);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320"><rect width="320" height="320" fill="hsl(${hue} 55% 55%)"/><text x="160" y="176" font-family="sans-serif" font-size="48" fill="rgba(255,255,255,.85)" text-anchor="middle">${index + 1}</text></svg>`;
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+/** HSL（s / l は 0〜1）を 0〜255 の RGB に直す。BlurHash 用の画素を作るだけの簡易版。 */
+function hslToRgb(hue: number, saturation: number, lightness: number): [number, number, number] {
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+  const sector = (((hue % 360) + 360) % 360) / 60;
+  const second = chroma * (1 - Math.abs((sector % 2) - 1));
+  const [r, g, b] =
+    sector < 1
+      ? [chroma, second, 0]
+      : sector < 2
+        ? [second, chroma, 0]
+        : sector < 3
+          ? [0, chroma, second]
+          : sector < 4
+            ? [0, second, chroma]
+            : sector < 5
+              ? [second, 0, chroma]
+              : [chroma, 0, second];
+  const offset = lightness - chroma / 2;
+  return [
+    Math.round((r + offset) * 255),
+    Math.round((g + offset) * 255),
+    Math.round((b + offset) * 255),
+  ];
+}
+
+/**
+ * mockThumbnail と同じ色相の BlurHash。
+ *
+ * 妥当な文字列を目視で確かめて貼るのではなく、その場で encodeBlurhash に通すことで
+ * 「必ず妥当なハッシュである」ことを作り方の側で保証する。
+ * 上下で明るさを変えているのは、単色だとぼかしが効いているか分からないため。
+ */
+export function mockBlurhash(index: number): string {
+  const width = 16;
+  const height = 16;
+  const rgba = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    // 上を明るく、下を暗くする縦のグラデーション。
+    const lightness = 0.75 - (y / (height - 1)) * 0.45;
+    const [r, g, b] = hslToRgb(hueOf(index), 0.55, lightness);
+    for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * 4;
+      rgba[offset] = r;
+      rgba[offset + 1] = g;
+      rgba[offset + 2] = b;
+      rgba[offset + 3] = 255;
+    }
+  }
+  return encodeBlurhash(rgba, width, height);
 }

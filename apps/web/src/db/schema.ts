@@ -185,6 +185,12 @@ export const photos = sqliteTable(
     instanceId: text("instance_id"),
     /** 撮影した VRChat ユーザー usr_... */
     authorId: text("author_id"),
+    /**
+     * 一覧の画像が読み込まれるまでのプレースホルダに使う BlurHash（28 文字）。
+     * アップロード時にデスクトップが計算して載せてくるが、それより前に
+     * アップロードされた行や計算前の行は null。後から Web 側が埋める。
+     */
+    blurhash: text("blurhash"),
     createdAt: integer("created_at").notNull(),
   },
   (table) => [

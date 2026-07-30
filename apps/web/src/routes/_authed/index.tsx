@@ -5,15 +5,23 @@
 
 import type {
   ApiPhoto,
+  ApiPhotoBlurhash,
   ListFacetsResponse,
   ListPhotosResponse,
   ListTagsResponse,
   Photo,
   PutPhotoTagsResponse,
 } from "@dragonfly/core";
+import { BLURHASH_PUT_LIMIT } from "@dragonfly/core";
 import {
   Button,
   cn,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   EmptyState,
   FilterCombobox,
   Input,
@@ -34,7 +42,37 @@ import {
   type ReactNode,
 } from "react";
 import { apiPhotoToPhoto } from "../../lib/apiPhotoToPhoto";
+import { extractPhotoBlurhash } from "../../lib/extractPhotoBlurhash";
+import { mapWithConcurrency } from "../../lib/extractPhotoPalette";
 import { fetchPhotosPage } from "../../server/fetchPhotosPage";
+
+/**
+ * BlurHash を計算する同時実行数。パレット抽出（/groups の 4）より控えめにしているのは、
+ * こちらは画面の裏で勝手に走る処理で、表示中のサムネイル取得と帯域を取り合うため。
+ */
+const BLURHASH_CONCURRENCY = 2;
+
+/** 配列を size 件ずつに割る。PUT の上限（BLURHASH_PUT_LIMIT）に合わせるのに使う。 */
+function chunk<T>(items: readonly T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
+}
+
+/**
+ * 描画が落ち着いてから cb を呼ぶ。戻り値を呼ぶと取り消せる。
+ *
+ * requestIdleCallback は Safari に無いので、能力判定は（SSR で焼き付かないよう）
+ * 呼び出し時に行い、無ければ短い setTimeout に落とす。
+ */
+function runWhenIdle(cb: () => void): () => void {
+  if (typeof requestIdleCallback === "function") {
+    const handle = requestIdleCallback(cb, { timeout: 3_000 });
+    return () => cancelIdleCallback(handle);
+  }
+  const handle = setTimeout(cb, 500);
+  return () => clearTimeout(handle);
+}
 
 /** URL 検索パラメータ。共有・リロードで再現できるフィルタと詳細 ID。 */
 export type GallerySearch = {
@@ -151,6 +189,12 @@ function GalleryPage() {
   // 保存中に表示するタグ。往復を待つと、追加したタグが一瞬消えて見えるため先に反映する。
   const [pendingTags, setPendingTags] = useState<string[] | null>(null);
   const [tagError, setTagError] = useState<string | null>(null);
+  // この画面で計算した BlurHash。apiPhotos には混ぜない（後述のバックフィルのコメント参照）。
+  const [computedBlurhashes, setComputedBlurhashes] = useState<Map<string, string>>(new Map());
+  // 削除の確認中の写真。null なら確認ダイアログは閉じている。
+  const [deleteTarget, setDeleteTarget] = useState<Photo | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // 絞り込みの選択肢（ワールド / VRChat ユーザー）。ID を覚えていなくても名前で選べるようにする。
   const [facets, setFacets] = useState<ListFacetsResponse>({ worlds: [], players: [] });
@@ -216,6 +260,15 @@ function GalleryPage() {
     return map;
   }, [apiPhotos]);
 
+  // カードのプレースホルダに使う BlurHash。
+  // サーバーに入っている値を正とし、まだ入っていない写真だけこの画面で計算した値で補う。
+  const blurhashById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of apiPhotos) if (p.blurhash) map.set(p.id, p.blurhash);
+    for (const [id, hash] of computedBlurhashes) if (!map.has(id)) map.set(id, hash);
+    return map;
+  }, [apiPhotos, computedBlurhashes]);
+
   const urlById = useMemo(() => {
     const map = new Map<string, string>();
     for (const p of apiPhotos) map.set(p.id, p.url);
@@ -276,6 +329,95 @@ function GalleryPage() {
       cancelled = true;
     };
   }, []);
+
+  // 一度でも BlurHash の計算に手を付けた写真 ID。成否を問わず入れて、二度は計算しない。
+  const attemptedBlurhashRef = useRef<Set<string>>(new Set());
+
+  // まだ BlurHash を持たない写真のぶんを、この画面を開いている間に埋めていく。
+  //
+  // ここで走らせる理由: プレースホルダが要るのはこのギャラリーなので、
+  // 「普通に開いていれば自然に埋まる」形が一番素直で、専用の画面や操作も要らない。
+  // 1 回に扱うのは今読み込んでいるぶんだけなので、無限スクロールで写真が増えるたびに
+  // この effect が続きを拾う（＝作業量が写真の総数に引きずられない）。
+  //
+  // 初回描画とスクロールを邪魔しないよう、着手はアイドルまで遅らせる。
+  // attempted はマウント単位なので、保存に失敗した写真は次に開いたときにやり直しになる
+  // （保存できていれば ApiPhoto に載って返ってくるので、そもそも候補に入らない）。
+  useEffect(() => {
+    // 候補の条件は blurhashById が「使う」条件のちょうど裏返し。
+    // === null ではなく falsy で見るのは、空文字が両方から漏れて
+    // 「表示もされないのに計算もされない」写真になるのを防ぐため。
+    const pending = apiPhotos.filter(
+      (photo) => !photo.blurhash && !attemptedBlurhashRef.current.has(photo.id),
+    );
+    if (pending.length === 0) return;
+
+    let cancelled = false;
+    const cancelIdle = runWhenIdle(() => {
+      // 印を付けるのは実際に走り出すこの時点。effect の本体で付けてしまうと、
+      // 実行前に effect が貼り直されたとき（React の開発時の二重実行）に
+      // 「手は付けていないのに二度と計算しない」写真ができてしまう。
+      for (const photo of pending) attemptedBlurhashRef.current.add(photo.id);
+
+      void (async () => {
+        const results = await mapWithConcurrency(
+          pending,
+          BLURHASH_CONCURRENCY,
+          async (photo): Promise<ApiPhotoBlurhash> => {
+            // 画面を離れたら残りは打ち切る。ここで止めないと、アンマウント後も
+            // サムネイルの取得とデコードが走り続けてしまう。
+            if (cancelled) throw new Error("cancelled");
+            const blurhash = await extractPhotoBlurhash(photo.thumbUrl, photo.id);
+            return { photoId: photo.id, blurhash };
+          },
+        );
+
+        // ここから先は cancelled を見ない。中断で止めたいのは「これから走る取得とデコード」
+        // だけで、既に計算し終わったぶんまで捨ててしまうと、無限スクロールで apiPhotos が
+        // 増えるたびに effect が貼り直され、直前のバッチの成果が毎回消える
+        // （attempted には入っているので、そのマウント中はもう計算し直されない）。
+        // 計算の代金は払い済みなので、アンマウント後でも反映と保存はやり切る。
+
+        // 1 枚の失敗で全体を止めない。プレースホルダが出ないだけなので黙って飛ばす。
+        const extracted: ApiPhotoBlurhash[] = [];
+        for (const result of results) {
+          if (result.status === "fulfilled") extracted.push(result.value);
+        }
+        if (extracted.length === 0) return;
+
+        // まず表示に回す。まだ画面外にある写真のぶんも、ここで入れておけば
+        // 今回のスクロールでそのまま効く。
+        setComputedBlurhashes((prev) => {
+          const next = new Map(prev);
+          for (const { photoId, blurhash } of extracted) next.set(photoId, blurhash);
+          return next;
+        });
+
+        // BLURHASH_PUT_LIMIT 件ずつ保存する。上限超過は 400 になるので必ず割る。
+        for (const part of chunk(extracted, BLURHASH_PUT_LIMIT)) {
+          try {
+            const res = await fetch("/api/v1/users/me/blurhashes", {
+              method: "PUT",
+              credentials: "include",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ blurhashes: part }),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          } catch (error) {
+            // 裏方の処理なので、保存に失敗しても画面には出さない。
+            // 表示は手元の値で足りており、次に開いたときにまた計算し直せばよい。
+            // ただし黙って消えると気付けないので、理由だけはコンソールに残す。
+            console.warn("BlurHash を保存できませんでした", error);
+          }
+        }
+      })();
+    });
+
+    return () => {
+      cancelled = true;
+      cancelIdle();
+    };
+  }, [apiPhotos]);
 
   // 名前で探せるように label は名前、value は ID。ID もキーワードに入れて直接引けるようにする。
   const worldOptions: FilterComboboxOption[] = useMemo(
@@ -422,6 +564,42 @@ function GalleryPage() {
     },
     [navigate],
   );
+
+  /** 削除ボタンが押されたとき。取り返しが付かないので、まず確認ダイアログを出す。 */
+  const requestDelete = useCallback((photo: Photo) => {
+    setDeleteTarget(photo);
+    setDeleteError(null);
+  }, []);
+
+  /** 確認ダイアログで「削除」を押されたとき。成功したら手元の表示も揃える。 */
+  const confirmDelete = useCallback(async () => {
+    if (!deleteTarget) return;
+    // Web では Photo.path が ApiPhoto.id（apiPhotoToPhoto がそう詰めている）。
+    const photoId = deleteTarget.path;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`/api/v1/users/me/photos/${encodeURIComponent(photoId)}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      // 成功は 204（本文なし）なので、JSON は読まずに ok だけを見る。
+      if (!res.ok) throw new Error(`写真を削除できませんでした (${res.status})`);
+
+      // loader は staleTime 中に再実行されないので、タグ保存と同じく手元を直接書き換える。
+      setApiPhotos((prev) => prev.filter((photo) => photo.id !== photoId));
+      setDetailExtra((prev) => (prev && prev.id === photoId ? null : prev));
+      setPreviewPhoto((prev) => (prev && prev.path === photoId ? null : prev));
+      // 一覧から消しただけだと ?photo= が残り、単体 GET が 404 になって
+      // 中身の無い詳細ダイアログが開いたままになる。URL からも外す。
+      if (search.photo === photoId) closeDetail(false);
+      setDeleteTarget(null);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "写真を削除できませんでした");
+    } finally {
+      setDeleting(false);
+    }
+  }, [deleteTarget, search.photo, closeDetail]);
 
   /** 選択式のフィルタ（ワールド / プレイヤー / タグ）をその場で URL に反映する。 */
   const applyFacet = useCallback(
@@ -595,6 +773,8 @@ function GalleryPage() {
             onInfo={openDetail}
             onPreview={openPreview}
             thumbnailSrcFor={(photo) => thumbById.get(photo.path)}
+            blurhashFor={(photo) => blurhashById.get(photo.path)}
+            onDelete={requestDelete}
             onNearEnd={nextCursor ? handleNearEnd : undefined}
           />
         )}
@@ -611,6 +791,7 @@ function GalleryPage() {
           search.photo ? (next) => void saveTags(search.photo as string, next) : undefined
         }
         onPreview={detailPhoto ? () => openPreview(detailPhoto) : undefined}
+        onDelete={detailPhoto ? () => requestDelete(detailPhoto) : undefined}
       />
 
       {/* 拡大表示。画像を左上に寄せ、右と下に情報を出してその場でタグも編集できる。 */}
@@ -623,6 +804,7 @@ function GalleryPage() {
         imageSrc={previewPhoto ? urlById.get(previewPhoto.path) : undefined}
         onPrev={() => stepPreview(-1)}
         onNext={() => stepPreview(1)}
+        onDelete={previewPhoto ? () => requestDelete(previewPhoto) : undefined}
         showInfo
         tags={previewPhoto ? tagsFor(previewPhoto.path) : []}
         onTagsChange={
@@ -631,6 +813,65 @@ function GalleryPage() {
         tagSuggestions={tagSuggestions}
         tagsPending={savingTagsFor !== null && savingTagsFor === previewPhoto?.path}
       />
+
+      {/* 削除の確認。元に戻せない操作なので、どの入り口（カード / 拡大表示 / 詳細）からでも
+          必ずここを通す。拡大表示や詳細ダイアログは開いたまま重ねるので、
+          やめたときは見ていた写真にそのまま戻れる。 */}
+      <Dialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          // 削除中に閉じられると結果の行き先が無くなるので、終わるまでは閉じさせない。
+          if (!open && !deleting) setDeleteTarget(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>この写真を削除しますか？</DialogTitle>
+            <DialogDescription>
+              サーバー上の画像とサムネイルを消します。元に戻せません。
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* どの写真を消そうとしているのかを取り違えないよう、サムネイルを添える。 */}
+          {deleteTarget ? (
+            <div className="flex items-center gap-3">
+              <img
+                src={thumbById.get(deleteTarget.path)}
+                alt=""
+                className="h-14 w-24 shrink-0 rounded-md border bg-muted object-cover"
+              />
+              <div className="min-w-0 text-sm">
+                <p className="truncate">{deleteTarget.metadata.world.name}</p>
+                <p className="truncate text-xs text-muted-foreground tabular-nums">
+                  {new Date(deleteTarget.takenAt).toLocaleString()}
+                </p>
+              </div>
+            </div>
+          ) : null}
+
+          {/* 失敗はダイアログの中に出す。閉じずに残しておけば、そのまま押し直せる。 */}
+          {deleteError ? <p className="text-sm text-destructive">{deleteError}</p> : null}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDeleteTarget(null)}
+              disabled={deleting}
+            >
+              キャンセル
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => void confirmDelete()}
+              disabled={deleting}
+            >
+              {deleting ? "削除中…" : "削除"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {tagError ? (
         <p className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-md bg-destructive px-3 py-1.5 text-sm text-destructive-foreground shadow">

@@ -1,5 +1,5 @@
 import type { Photo } from "@dragonfly/core";
-import { Clock, Globe, Maximize2, Tag, Users } from "lucide-react";
+import { Clock, Globe, Maximize2, Tag, Trash2, Users } from "lucide-react";
 
 import { formatTakenAt } from "../lib/format";
 import { cn } from "../lib/utils";
@@ -28,6 +28,11 @@ export interface PhotoDetailDialogProps {
   tagsPending?: boolean;
   /** 画像を前面いっぱいに出す要求。渡さなければ拡大ボタンを出さない。 */
   onPreview?: () => void;
+  /**
+   * 削除の要求。渡したときだけ削除ボタンを出す。
+   * 確認ダイアログは呼び出し側の責務で、ここでは押されたことを伝えるだけ。
+   */
+  onDelete?: () => void;
   className?: string;
 }
 
@@ -45,6 +50,7 @@ export function PhotoDetailDialog({
   tagSuggestions = [],
   tagsPending = false,
   onPreview,
+  onDelete,
   className,
 }: PhotoDetailDialogProps) {
   // ワールド名が空文字の写真でもタイトルが空にならないようにする。
@@ -72,6 +78,22 @@ export function PhotoDetailDialog({
                   <Button type="button" variant="outline" size="sm" onClick={onPreview}>
                     <Maximize2 aria-hidden />
                     拡大
+                  </Button>
+                ) : null}
+
+                {/* 削除は誤爆すると取り返しが付かないので、
+                    文字を出さないアイコンだけのボタンにして拡大と大きさを揃える。 */}
+                {onDelete ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    aria-label="削除"
+                    title="削除"
+                    onClick={onDelete}
+                    className="text-destructive hover:bg-destructive hover:text-white"
+                  >
+                    <Trash2 aria-hidden />
                   </Button>
                 ) : null}
               </div>

@@ -34,8 +34,11 @@ export type {
   ListPalettesResponse,
   PutPalettesRequest,
   PutPalettesResponse,
+  ApiPhotoBlurhash,
+  PutBlurhashesRequest,
+  PutBlurhashesResponse,
 } from "./api";
-export { CHECK_HASH_LIMIT, PALETTE_PUT_LIMIT } from "./api";
+export { CHECK_HASH_LIMIT, PALETTE_PUT_LIMIT, BLURHASH_PUT_LIMIT } from "./api";
 
 export type { PaletteSwatch, PhotoPalette, DistanceMatrix, PaletteWeighting } from "./palette";
 export {
@@ -52,6 +55,14 @@ export {
   groupByCount,
   nearestPhotos,
 } from "./palette";
+
+export {
+  BLURHASH_COMPONENTS_X,
+  BLURHASH_COMPONENTS_Y,
+  encodeBlurhash,
+  decodeBlurhashToRgba,
+  isValidBlurhash,
+} from "./blurhash";
 
 export type { AppSettings } from "./settings";
 export { DEFAULT_SETTINGS } from "./settings";

@@ -36,3 +36,8 @@ export const Editable: Story = {
     onPreview: () => {},
   },
 };
+
+/** 削除できる状態。拡大の隣にゴミ箱が並ぶ。確認は呼び出し側が出す。 */
+export const WithDelete: Story = {
+  args: { onPreview: () => {}, onDelete: () => {} },
+};

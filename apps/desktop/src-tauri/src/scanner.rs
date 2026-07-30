@@ -319,13 +319,18 @@ pub async fn scan_photos(app: AppHandle) -> Result<ScanResult, String> {
 
     // 走査は CPU / I/O ともに重いのでブロッキングプールへ逃がす。
     let handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        scan_directory(&root, move |progress| {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let result = scan_directory(&root, |progress| {
             let _ = handle.emit(SCAN_PROGRESS_EVENT, progress);
-        })
+        });
+        // 次の起動で即座に一覧を出せるよう、結果をキャッシュへ残す。
+        // 書き込みに失敗しても走査結果自体は返せるので、警告だけにする。
+        crate::scan_cache::store_scan_result(&handle, &result);
+        result
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    Ok(result)
 }
 
 #[cfg(test)]

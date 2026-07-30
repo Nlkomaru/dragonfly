@@ -8,6 +8,7 @@ import { waitUntil } from "cloudflare:workers";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { describeRoute, resolver, validator } from "hono-openapi";
+import { z } from "zod";
 import {
   ApiPhotoSchema,
   CheckPhotosRequestSchema,
@@ -28,6 +29,7 @@ import type { ApiEnv } from "./middleware";
 import { requireAuth, requireAuthOrSignedPhoto, resolveOwner } from "./middleware";
 import {
   deletePhoto,
+  deletePhotoBySourceHash,
   findUploadedHashes,
   getPhoto,
   insertPhoto,
@@ -57,6 +59,18 @@ const notFoundResponse = {
     content: { "application/json": { schema: resolver(ErrorResponseSchema) } },
   },
 };
+
+/**
+ * ハッシュ指定の削除だけが持つパスパラメータ。
+ * 形は schemas.ts の sha256Schema と同じ（変換前 PNG の SHA-256、16 進小文字 64 文字）だが、
+ * あちらは非公開なのでここで書き下している。使うルートが 1 本しかないため共有もしていない。
+ */
+const UserPhotoHashParamSchema = UserParamSchema.extend({
+  sourceSha256: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/, "must be a lowercase hex sha-256")
+    .meta({ description: "変換前 PNG の SHA-256", example: "a".repeat(64) }),
+});
 
 // basePath は handler.ts 側で与える。ここは :id 以下だけを組み立てる。
 const photosRouter = new Hono<ApiEnv>();
@@ -295,6 +309,44 @@ photosRouter.get(
     );
     if (!photo) throw new HTTPException(404, { message: "photo not found" });
     return c.json(photo);
+  },
+);
+
+// `:photoId` より前に置く。パスの深さが違うので実際には食い合わないが、
+// 「具体的なものを先に」の順序にしておけば、後から増やしたときも取り違えない。
+photosRouter.delete(
+  "/users/:id/photos/by-hash/:sourceSha256",
+  describeRoute({
+    tags: ["photos"],
+    summary: "変換前ハッシュを指定した写真の削除",
+    description:
+      "消すものは ID 指定の削除とまったく同じ。行の特定に (owner_id, source_sha256) を使う。" +
+      "デスクトップはサーバー側の写真 ID を覚えていないので、手元で計算できる" +
+      "変換前 PNG の SHA-256 から消せるようにしてある。" +
+      "他人の写真のハッシュを指定した場合も 404（存在の有無は返さない）。",
+    responses: {
+      204: { description: "削除した" },
+      400: {
+        description: "ハッシュの形式が不正",
+        content: { "application/json": { schema: resolver(ErrorResponseSchema) } },
+      },
+      ...notFoundResponse,
+      ...commonErrorResponses,
+    },
+  }),
+  validator("param", UserPhotoHashParamSchema),
+  async (c) => {
+    const keys = await deletePhotoBySourceHash(
+      c.get("db"),
+      c.get("ownerId"),
+      c.req.param("sourceSha256"),
+    );
+    if (!keys) throw new HTTPException(404, { message: "photo not found" });
+    // ID 指定のときと同じく、R2 の削除は応答をブロックしない。
+    waitUntil(
+      c.get("photos").delete(keys.thumbKey ? [keys.r2Key, keys.thumbKey] : [keys.r2Key]),
+    );
+    return c.body(null, 204);
   },
 );
 

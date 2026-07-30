@@ -60,6 +60,11 @@ pub struct UploadPhotoMetadata {
     pub vrcx: VrcxMetadata,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    /// 読み込み前に出すプレースホルダ用の BlurHash。
+    /// サーバー側のスキーマは `.optional()` なのでキーが無いのは通るが、
+    /// `null` は 400 で弾かれる。計算できなかったときは必ずキーごと落とす。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blurhash: Option<String>,
 }
 
 /// `/api/v1/users/{owner}/photos` のレスポンス。
@@ -168,7 +173,23 @@ fn is_retryable(status: Option<reqwest::StatusCode>) -> bool {
 }
 
 /// 指数バックオフ付きでリクエストを実行する。`build` は毎回新しいリクエストを作る。
+///
+/// 409 は「既に存在する」= 成功扱いなので、エラーにせず呼び出し側に返す。
 async fn send_with_retry<F>(build: F) -> Result<reqwest::Response, String>
+where
+    F: Fn() -> reqwest::RequestBuilder,
+{
+    send_with_retry_allowing(build, &[reqwest::StatusCode::CONFLICT]).await
+}
+
+/// [`send_with_retry`] の一般形。`allowed` のステータスはエラーにせずそのまま返す。
+///
+/// 呼び出しごとに「失敗ではない 4xx」が違う（削除なら 404 = 既に無い）ので、
+/// 既定の 409 だけを見る [`send_with_retry`] とは別に、渡せる形も用意する。
+async fn send_with_retry_allowing<F>(
+    build: F,
+    allowed: &[reqwest::StatusCode],
+) -> Result<reqwest::Response, String>
 where
     F: Fn() -> reqwest::RequestBuilder,
 {
@@ -178,8 +199,7 @@ where
             Ok(response) if response.status().is_success() => return Ok(response),
             Ok(response) => {
                 let status = response.status();
-                // 409 は「既に存在する」= 成功扱いなので呼び出し側に返す。
-                if status == reqwest::StatusCode::CONFLICT {
+                if allowed.contains(&status) {
                     return Ok(response);
                 }
                 if !is_retryable(Some(status)) {
@@ -221,6 +241,38 @@ pub async fn check_uploaded(app: AppHandle, hashes: Vec<String>) -> Result<Vec<S
         uploaded.extend(parsed.uploaded);
     }
     Ok(uploaded)
+}
+
+/// SHA-256 の 16 進表現として妥当かどうか。
+///
+/// ハッシュをそのまま URL のパスに埋めるため、ここで形を確かめてから送る。
+/// 変な値を投げてサーバー側の 404 と区別が付かなくなるのを防ぐ意味もある。
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// サーバー上の写真を 1 枚削除する。ローカルの PNG には触らない。
+///
+/// デスクトップ側はサーバーの写真 ID を持っていないので、元 PNG のハッシュで引く
+/// エンドポイントを使う。404 は「サーバー側に既に無い」= 望んだ状態なので成功扱いにする。
+#[tauri::command]
+pub async fn delete_remote_photo(app: AppHandle, sha256: String) -> Result<(), String> {
+    if !is_sha256_hex(&sha256) {
+        return Err(format!("{sha256} is not a SHA-256 hex digest"));
+    }
+    let ctx = ApiContext::build(&app)?;
+    let path = user_path(CURRENT_USER, &format!("/photos/by-hash/{sha256}"));
+    let response = send_with_retry_allowing(
+        || ctx.client.delete(ctx.url(&path)).bearer_auth(&ctx.api_key),
+        &[reqwest::StatusCode::NOT_FOUND],
+    )
+    .await?;
+
+    // 成功と 404 以外はここへ来ない（それ以外は send_with_retry_allowing が Err にする）。
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        eprintln!("warning: the photo was already gone on the server: {sha256}");
+    }
+    Ok(())
 }
 
 /// API キーの有効性とサーバー到達性を確かめる。
@@ -281,6 +333,7 @@ async fn upload_one(ctx: &ApiContext, path: &Path) -> Result<UploadOutcome, Stri
         height: converted.height,
         vrcx,
         tags: None,
+        blurhash: converted.blurhash.clone(),
     };
     let metadata_json = serde_json::to_string(&metadata).map_err(|e| e.to_string())?;
 
@@ -439,5 +492,15 @@ mod tests {
         );
         // owner に具体的なユーザー ID を渡せることの確認。
         assert_eq!(user_path("u_123", "/photos"), "/api/v1/users/u_123/photos");
+    }
+
+    #[test]
+    fn only_a_64_character_hex_digest_is_accepted() {
+        assert!(is_sha256_hex(
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        ));
+        // 短い / 16 進でない文字が混じるものは弾く。
+        assert!(!is_sha256_hex("ba7816bf"));
+        assert!(!is_sha256_hex(&"z".repeat(64)));
     }
 }

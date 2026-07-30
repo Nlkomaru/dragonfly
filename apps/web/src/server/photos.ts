@@ -5,11 +5,12 @@
 
 import type {
   ApiPhoto,
+  ApiPhotoBlurhash,
   ListFacetsResponse,
   ListPhotosResponse,
   UploadPhotoMetadata,
 } from "@dragonfly/core";
-import { and, desc, eq, gte, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import type { BatchItem } from "drizzle-orm/batch";
 import type { DrizzleDb } from "../db/client";
 import {
@@ -46,6 +47,7 @@ const photoColumns = {
   worldId: photos.worldId,
   worldName: photos.worldName,
   instanceId: photos.instanceId,
+  blurhash: photos.blurhash,
 };
 
 /** photoColumns で SELECT した 1 行。NULL 許容はテーブル定義と揃えてある。 */
@@ -59,6 +61,7 @@ interface PhotoRow {
   worldId: string | null;
   worldName: string | null;
   instanceId: string | null;
+  blurhash: string | null;
 }
 
 /**
@@ -98,6 +101,8 @@ async function toApiPhoto(
       : null,
     players,
     tags: tagNames,
+    // 未計算なら null。クライアントはそれを見て「後から埋める対象」だと判断する。
+    blurhash: row.blurhash,
   };
 }
 
@@ -111,6 +116,15 @@ async function toApiPhoto(
  */
 const D1_IN_CHUNK = 90;
 
+/** IN に並べる値を D1 のバインド変数の上限に収まる長さへ割る。 */
+function chunkForIn(values: string[]): string[][] {
+  const chunks: string[][] = [];
+  for (let i = 0; i < values.length; i += D1_IN_CHUNK) {
+    chunks.push(values.slice(i, i + D1_IN_CHUNK));
+  }
+  return chunks;
+}
+
 /** 送信済みハッシュの一括判定。所有者で絞るので他人の写真は決して当たらない。 */
 export async function findUploadedHashes(
   db: DrizzleDb,
@@ -120,10 +134,7 @@ export async function findUploadedHashes(
   if (hashes.length === 0) return [];
 
   // D1 のバインド変数の上限に収まるように割ってから引く。
-  const chunks: string[][] = [];
-  for (let i = 0; i < hashes.length; i += D1_IN_CHUNK) {
-    chunks.push(hashes.slice(i, i + D1_IN_CHUNK));
-  }
+  const chunks = chunkForIn(hashes);
 
   const results = await Promise.all(
     chunks.map((chunk) =>
@@ -134,6 +145,31 @@ export async function findUploadedHashes(
     ),
   );
   return results.flat().map((row) => row.sourceSha256);
+}
+
+/**
+ * 渡した写真 ID のうち、そのユーザーが実際に持っているものだけを返す。
+ * 一括書き込みの前に「他人の写真 ID」と「存在しない ID」をまとめて落とすのに使う。
+ *
+ * findUploadedHashes と同じく必ず分割して引く。ID の件数 + owner_id が
+ * D1 のバインド変数の上限を超えると、クエリ自体が失敗するため。
+ */
+async function findOwnedPhotoIds(
+  db: DrizzleDb,
+  ownerId: string,
+  photoIds: string[],
+): Promise<Set<string>> {
+  if (photoIds.length === 0) return new Set();
+
+  const results = await Promise.all(
+    chunkForIn(photoIds).map((chunk) =>
+      db
+        .select({ id: photos.id })
+        .from(photos)
+        .where(and(eq(photos.ownerId, ownerId), inArray(photos.id, chunk))),
+    ),
+  );
+  return new Set(results.flat().map((row) => row.id));
 }
 
 /** (owner_id, source_sha256) から既存の写真 ID を引く。冪等判定に使う。 */
@@ -151,6 +187,25 @@ async function findPhotoIdByHash(
 }
 
 /**
+ * 再送で既存行に当たったときに、まだ空の blurhash だけを埋める。
+ *
+ * WHERE に IS NULL を付けるのが要。blurhash を計算できない古いデスクトップからの再送でも
+ * 既に入っている値を消さないため、上書きではなく「空のときだけ書く」にしてある。
+ * 送られてこなかった場合 (undefined) は何もしない。
+ */
+async function fillMissingBlurhash(
+  db: DrizzleDb,
+  photoId: string,
+  blurhash: string | undefined,
+): Promise<void> {
+  if (!blurhash) return;
+  await db
+    .update(photos)
+    .set({ blurhash })
+    .where(and(eq(photos.id, photoId), isNull(photos.blurhash)));
+}
+
+/**
  * 写真 1 枚分の行をまとめて書き込む。
  * 複数テーブルにまたがるので D1 の batch() で 1 まとまりにし、
  * 途中で失敗しても孤児行が残らないようにする。
@@ -164,7 +219,11 @@ export async function insertPhoto(
 ): Promise<{ id: string; deduplicated: boolean }> {
   // 先に確かめておかないと、batch の後続文が「存在しない photo_id」の関連行を作ってしまう。
   const duplicate = await findPhotoIdByHash(db, ownerId, metadata.sourceSha256);
-  if (duplicate) return { id: duplicate, deduplicated: true };
+  if (duplicate) {
+    // 行は増やさないが、blurhash を持たない時代に入った写真はこの再送で埋まる。
+    await fillMissingBlurhash(db, duplicate, metadata.blurhash);
+    return { id: duplicate, deduplicated: true };
+  }
 
   const now = Date.now();
   const photoId = uuidv7();
@@ -189,6 +248,8 @@ export async function insertPhoto(
       worldName: world.name,
       instanceId: world.instanceId,
       authorId: author.id,
+      // 計算できたときだけ載ってくる。無ければ null のままで、後から Web 側が埋める。
+      blurhash: metadata.blurhash ?? null,
       createdAt: now,
     }),
     db
@@ -247,7 +308,11 @@ export async function insertPhoto(
   } catch (error) {
     // 同じ写真が並行して入った場合だけ重複として扱う。R2 は内容アドレスなので実体は同一。
     const existing = await findPhotoIdByHash(db, ownerId, metadata.sourceSha256);
-    if (existing) return { id: existing, deduplicated: true };
+    if (existing) {
+      // 競り勝った側が blurhash を入れているとは限らないので、こちらでも埋めておく。
+      await fillMissingBlurhash(db, existing, metadata.blurhash);
+      return { id: existing, deduplicated: true };
+    }
     throw error;
   }
 }
@@ -563,4 +628,67 @@ export async function deletePhoto(
     db.delete(photos).where(and(eq(photos.id, photoId), eq(photos.ownerId, ownerId))),
   ]);
   return keys;
+}
+
+/**
+ * source_sha256 から引いて削除する。消すものも戻り値も id 版とまったく同じで、
+ * 行の特定の仕方だけが違う。
+ *
+ * デスクトップはサーバー側の写真 ID を持たない（アップロード後に覚えていない）ので、
+ * 手元で計算できる変換前 PNG のハッシュから消せる経路を用意している。
+ * (owner_id, source_sha256) は一意索引なので、当たる行は高々 1 つ。
+ */
+export async function deletePhotoBySourceHash(
+  db: DrizzleDb,
+  ownerId: string,
+  sourceSha256: string,
+): Promise<{ r2Key: string; thumbKey: string | null } | null> {
+  const photoId = await findPhotoIdByHash(db, ownerId, sourceSha256);
+  // 他人の写真のハッシュを指された場合もここに来る。存在の有無は漏らさない。
+  if (!photoId) return null;
+  // 削除そのものは id 版に任せる。消し忘れるテーブルが片方だけ出るのを防ぐため。
+  return deletePhoto(db, ownerId, photoId);
+}
+
+/**
+ * BlurHash をまとめて書き込み、実際に保存できた件数を返す。
+ *
+ * blurhash は写真の側テーブルではなく photos の 1 列なので、パレットと違って
+ * ここ（server/photos.ts）に置いている。ルータだけは api/blurhashes.ts に分けてある。
+ *
+ * 計算はサムネイル (AVIF) をデコードできるブラウザ側の仕事で、サーバーは置くだけ。
+ * 自分が所有していない写真 ID は黙って捨てる（他人の写真の存在を漏らさないため、
+ * 404 にはせず saved の件数だけが減る）。
+ */
+export async function upsertBlurhashes(
+  db: DrizzleDb,
+  ownerId: string,
+  blurhashes: ApiPhotoBlurhash[],
+): Promise<number> {
+  if (blurhashes.length === 0) return 0;
+
+  // 同じ photo_id が二度来ても列は 1 つなので、入口で後勝ちに畳んでおく。
+  // 畳まないと同じ行を二重に数えて saved が実態より多くなる。
+  const unique = new Map<string, string>();
+  for (const entry of blurhashes) unique.set(entry.photoId, entry.blurhash);
+
+  const ownedIds = await findOwnedPhotoIds(db, ownerId, [...unique.keys()]);
+
+  const statements: BatchItem<"sqlite">[] = [];
+  for (const [photoId, blurhash] of unique) {
+    if (!ownedIds.has(photoId)) continue;
+    // insertPhoto の fillMissingBlurhash と違い、ここは IS NULL で絞らない。
+    // 呼び出し元は「今のアルゴリズムで計算し直した値」を送ってくるので、上書きが正しい。
+    statements.push(
+      db
+        .update(photos)
+        .set({ blurhash })
+        .where(and(eq(photos.id, photoId), eq(photos.ownerId, ownerId))),
+    );
+  }
+
+  // batch() は 1 文以上を要求するので、1 件も通らなかったときは呼ばない。
+  if (statements.length === 0) return 0;
+  await db.batch(statements as [BatchItem<"sqlite">, ...BatchItem<"sqlite">[]]);
+  return statements.length;
 }

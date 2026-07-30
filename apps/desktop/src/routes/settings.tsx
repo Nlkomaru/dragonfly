@@ -16,12 +16,20 @@ type ConnectionState =
   | { status: "ok"; displayName: string }
   | { status: "error"; message: string };
 
+/** 走査キャッシュの消去状況。消せたのか失敗したのかを区別して伝える。 */
+type CacheState =
+  | { status: "idle" }
+  | { status: "clearing" }
+  | { status: "cleared" }
+  | { status: "error"; message: string };
+
 function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [hasApiKey, setHasApiKey] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [revealKey, setRevealKey] = useState(false);
   const [connection, setConnection] = useState<ConnectionState>({ status: "idle" });
+  const [cacheState, setCacheState] = useState<CacheState>({ status: "idle" });
 
   useEffect(() => {
     void (async () => {
@@ -47,6 +55,20 @@ function SettingsPage() {
     setApiKeyInput("");
     setHasApiKey(true);
   }, [apiKeyInput]);
+
+  /**
+   * 走査キャッシュを消す。表示が実際と食い違ったときの逃げ道なので、
+   * 失敗しても消えたことにはせず、理由を出して押し直せるようにする。
+   */
+  const clearCache = useCallback(async () => {
+    setCacheState({ status: "clearing" });
+    try {
+      await call<void>("clear_scan_cache");
+      setCacheState({ status: "cleared" });
+    } catch (error) {
+      setCacheState({ status: "error", message: String(error) });
+    }
+  }, []);
 
   const testConnection = useCallback(async () => {
     setConnection({ status: "testing" });
@@ -120,6 +142,24 @@ function SettingsPage() {
         </section>
 
         <section className="space-y-2">
+          <Label>一覧のキャッシュ</Label>
+          <p className="text-sm text-muted-foreground">
+            起動直後に前回の走査結果をそのまま表示するための控えです。
+            表示がおかしいときに消してください。写真そのものは消えません。
+          </p>
+          <div className="flex items-center gap-3">
+            <Button
+              variant="outline"
+              onClick={() => void clearCache()}
+              disabled={cacheState.status === "clearing" || cacheState.status === "cleared"}
+            >
+              キャッシュを消去
+            </Button>
+            <CacheMessage state={cacheState} />
+          </div>
+        </section>
+
+        <section className="space-y-2">
           <Label>AVIF の品質（{settings.avifQuality}）</Label>
           <Input
             type="range"
@@ -132,6 +172,23 @@ function SettingsPage() {
       </div>
     </div>
   );
+}
+
+function CacheMessage({ state }: { state: CacheState }) {
+  switch (state.status) {
+    case "cleared":
+      return (
+        <span className="text-sm text-muted-foreground">
+          消去しました（次の走査から作り直します）
+        </span>
+      );
+    case "error":
+      return <span className="text-sm text-destructive">{state.message}</span>;
+    case "clearing":
+      return <span className="text-sm text-muted-foreground">消去中…</span>;
+    default:
+      return null;
+  }
 }
 
 function ConnectionMessage({ state }: { state: ConnectionState }) {
