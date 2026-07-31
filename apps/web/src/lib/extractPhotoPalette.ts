@@ -8,7 +8,7 @@
 // 能力判定はすべて関数の呼び出し時に行う。
 
 import type { PaletteSwatch } from "@dragonfly/core";
-import { extractPalette } from "@dragonfly/core";
+import { buildHistogram, encodeHistogram, extractPalette } from "@dragonfly/core";
 
 /**
  * 縮小後の長辺(px)。代表色を取るだけなら細部は不要で、
@@ -62,8 +62,18 @@ function drawToImageData(bitmap: ImageBitmap, width: number, height: number): Im
   return context.getImageData(0, 0, width, height);
 }
 
+/** 1 枚から取り出す色の情報。パレットは表示用、ヒストグラムは距離の計算用。 */
+export interface PhotoColors {
+  swatches: PaletteSwatch[];
+  /** 色ヒストグラムの base64。そのまま API に載せて D1 に保存する。 */
+  histogram: string;
+}
+
 /**
- * サムネイル画像 1 枚から代表色パレット（PALETTE_SIZE 色）を抽出する。
+ * サムネイル画像 1 枚から、代表色パレットと色ヒストグラムを取り出す。
+ *
+ * 2 つを別々に取ると同じサムネイルを 2 回デコードすることになるので、
+ * 1 回取り出した RGBA から両方を作る。
  *
  * seed に photoId を渡すため、同じ写真からは常に同じパレットが得られる。
  * 失敗時は理由の分かる Error を投げるので、呼び出し側でスキップするか通知すること。
@@ -71,10 +81,10 @@ function drawToImageData(bitmap: ImageBitmap, width: number, height: number): Im
  * @param thumbUrl サムネイル(AVIF)の URL。認証付きの API を叩くので cookie を同送する。
  * @param photoId k-means の乱数シード兼、結果の紐付け先。
  */
-export async function extractPhotoPalette(
+export async function extractPhotoColors(
   thumbUrl: string,
   photoId: string,
-): Promise<PaletteSwatch[]> {
+): Promise<PhotoColors> {
   let response: Response;
   try {
     response = await fetch(thumbUrl, { credentials: "include" });
@@ -98,7 +108,10 @@ export async function extractPhotoPalette(
   try {
     const { width, height } = fitToSampleSize(bitmap.width, bitmap.height);
     const imageData = drawToImageData(bitmap, width, height);
-    return extractPalette(imageData.data, photoId);
+    return {
+      swatches: extractPalette(imageData.data, photoId),
+      histogram: encodeHistogram(buildHistogram(imageData.data)),
+    };
   } finally {
     // ImageBitmap はデコード済みのビットマップを抱えたままなので、成否を問わず解放する。
     bitmap.close();

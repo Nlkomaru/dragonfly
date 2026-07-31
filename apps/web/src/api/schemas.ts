@@ -157,6 +157,16 @@ export const ApiPhotoPaletteSchema = z.object({
     .int()
     .meta({ description: "抽出アルゴリズムの版。古ければクライアントが抽出し直す" }),
   swatches: z.array(PaletteSwatchSchema).min(1).max(PALETTE_SIZE),
+  /**
+   * 色ヒストグラム（base64）。距離の計算はこれで行う。
+   * 版が古いパレットには無いので任意。長さの上限は「600 bin すべてに値が入り、
+   * 1 bin 3 バイト」の最悪ケース (2400 文字) に余裕を持たせた値。
+   */
+  histogram: z
+    .string()
+    .max(4096)
+    .optional()
+    .meta({ description: "色ヒストグラムの base64。距離の計算に使う" }),
 });
 
 export const ListPalettesResponseSchema = z.object({

@@ -56,6 +56,21 @@ export {
   nearestPhotos,
 } from "./palette";
 
+export type { PhotoHistogram, PhotoRef } from "./histogram";
+export {
+  HISTOGRAM_VERSION,
+  HISTOGRAM_BINS,
+  HISTOGRAM_SIZE,
+  buildHistogram,
+  encodeHistogram,
+  decodeHistogram,
+  histogramDistance,
+  buildHistogramMatrixFlat,
+  averageLinkageLabels,
+  splitOversizedLabels,
+  groupByTargetSize,
+} from "./histogram";
+
 export {
   BLURHASH_COMPONENTS_X,
   BLURHASH_COMPONENTS_Y,

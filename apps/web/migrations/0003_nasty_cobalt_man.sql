@@ -1,0 +1,1 @@
+ALTER TABLE `photo_palettes` ADD `histogram` text;
