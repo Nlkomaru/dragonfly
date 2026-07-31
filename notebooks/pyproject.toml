@@ -1,0 +1,28 @@
+[project]
+name = "dragonfly-notebooks"
+version = "0.1.0"
+description = "dragonfly の色パレット関連ロジックを marimo で検証するためのノートブック群"
+requires-python = ">=3.12"
+dependencies = [
+    "marimo>=0.20.0",
+    "numpy>=2.0.0",
+    "pillow>=11.0.0",
+    "matplotlib>=3.9.0",
+    "scipy>=1.18.0",
+    "scikit-learn>=1.9.0",
+    "pot>=0.9.7.post1",
+]
+
+[dependency-groups]
+# marimo はノートブック内のテストセルを pytest で実行するため、開発時のみ入れる。
+dev = ["pytest>=8.0.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dragonfly_lab"]
+
+[tool.marimo.runtime]
+output_max_bytes = 10_000_000
