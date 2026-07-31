@@ -288,6 +288,14 @@ export const photoPalettes = sqliteTable(
     version: integer("version").notNull(),
     /** PaletteSwatch[] を JSON.stringify したもの。 */
     swatches: text("swatches").notNull(),
+    /**
+     * 色ヒストグラム（`encodeHistogram` の base64）。距離の計算にはこちらを使う。
+     *
+     * 代表色 5 色より写真の色分布をよく表すので、グループ分けの精度が上がる。
+     * 疎な表現に量子化してあるので 1 枚あたり数百バイトで収まる。
+     * 版が古い行では未設定なので null 許容。クライアントが抽出し直して埋める。
+     */
+    histogram: text("histogram"),
     updatedAt: integer("updated_at").notNull(),
   },
   (table) => [

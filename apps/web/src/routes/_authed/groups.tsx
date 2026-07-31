@@ -10,35 +10,38 @@ import type {
   DistanceMatrix,
   ListPalettesResponse,
   ListPhotosResponse,
-  PaletteWeighting,
   PhotoPalette,
   PutPalettesResponse,
 } from "@dragonfly/core";
 import {
   PALETTE_PUT_LIMIT,
   PALETTE_VERSION,
-  groupByCount,
+  groupByTargetSize,
   groupByThreshold,
   nearestPhotos,
 } from "@dragonfly/core";
-import { Button, Checkbox, EmptyState, PaletteSwatches, cn } from "@dragonfly/ui";
+import { Button, EmptyState, PaletteSwatches, cn } from "@dragonfly/ui";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildDistanceMatrixAsync } from "../../lib/buildDistanceMatrixAsync";
 import { ZIP_MAX_PHOTOS, downloadPhotosZip } from "../../lib/downloadPhotosZip";
-import { extractPhotoPalette, mapWithConcurrency } from "../../lib/extractPhotoPalette";
+import { extractPhotoColors, mapWithConcurrency } from "../../lib/extractPhotoPalette";
 
 /** 集める写真の上限。距離行列が n^2 なので、これ以上は待ち時間が実用外になる。 */
 const MAX_PHOTOS = 2000;
 /** サムネイルのデコードの同時実行数。増やしても回線とデコーダの取り合いになるだけ。 */
 const EXTRACT_CONCURRENCY = 4;
 
-/** しきい値スライダーの範囲。paletteDistance は概ね 0〜1 強なので、実用域だけを切り出す。 */
+/**
+ * しきい値スライダーの範囲。
+ * ヒストグラム同士の Hellinger 距離は 0〜√2 に収まり、実写では 0.6〜1.3 に集まるので、
+ * 意味のある範囲だけを切り出す。
+ */
 const THRESHOLD_MIN = 0;
-const THRESHOLD_MAX = 0.5;
-const THRESHOLD_STEP = 0.005;
+const THRESHOLD_MAX = 1.2;
+const THRESHOLD_STEP = 0.01;
 /** 既定のしきい値。体感でほどよく分かれる値を初期位置にする。 */
-const THRESHOLD_DEFAULT = 0.12;
+const THRESHOLD_DEFAULT = 0.6;
 
 /** 枚数モードのスライダー範囲。1 グループあたりの枚数として現実的な幅だけを出す。 */
 const SIZE_MIN = 2;
@@ -61,6 +64,10 @@ export type GroupsSearch = {
   /** mode === "count" のときの、1 グループあたりのおおよその枚数。 */
   size?: number;
   /** true なら差し色（彩度の高い色）を重視した距離で比べる。 */
+  /**
+   * 旧「差し色を重視」。距離が色ヒストグラムになり、彩度の重み付けは常に有効になったため
+   * 現在は使っていない。古い共有 URL でエラーにならないよう、受け取るだけは続ける。
+   */
   accent?: boolean;
   /** 「似た写真」の基準にしている写真 ID。 */
   photo?: string;
@@ -141,16 +148,13 @@ function GroupsPage() {
   const [unsaved, setUnsaved] = useState(0);
   // 表示に使うパレット。行列を作り直したくないので、パイプラインの最後に一度だけ入れる。
   const [palettes, setPalettes] = useState<PhotoPalette[]>([]);
+  // 距離を測るための色ヒストグラム（base64）。palettes と同じ並び順。
+  const [histograms, setHistograms] = useState<{ photoId: string; histogram: string }[]>([]);
   // Worker が作った距離行列。Float64Array の行ビューなので、読み取りは number[][] と同じ。
   const [matrix, setMatrix] = useState<DistanceMatrix | null>(null);
 
   // グループ分けの方式。URL に無ければ従来の「色の近さ」方式。
   const mode: GroupMode = search.mode ?? "threshold";
-  // 距離の重み付け。アクセント重視は「ほぼ黒に一箇所だけ赤」のような差し色を強く効かせる。
-  const weighting: PaletteWeighting = search.accent ? "accent" : "area";
-  // 今ある行列がどちらの重み付けで作られたか。切り替えたときだけ作り直すための印。
-  const matrixWeightingRef = useRef<PaletteWeighting>("area");
-
   // スライダーは掴んでいる間ずっと動くので、離すまでは手元の値だけ動かす。
   // URL に毎フレーム書くと履歴が溢れ、groupByThreshold も走りっぱなしになる。
   const committedThreshold = search.threshold ?? THRESHOLD_DEFAULT;
@@ -233,7 +237,8 @@ function GroupsPage() {
           ? photos
           : photos.filter((photo) => {
               const palette = stored.get(photo.id);
-              return !palette || palette.version < PALETTE_VERSION;
+              // 版が同じでもヒストグラムが無ければ距離を測れないので、抽出し直す。
+              return !palette || palette.version < PALETTE_VERSION || !palette.histogram;
             });
 
         if (pending.length > 0) {
@@ -248,11 +253,11 @@ function GroupsPage() {
               // 最大 MAX_PHOTOS 枚のサムネイル取得とデコードが走り続けてしまう。
               // ここで投げた分は下の cancelled チェックで捨てられるので skipped には出ない。
               if (cancelled) throw new Error("cancelled");
-              const swatches = await extractPhotoPalette(photo.thumbUrl, photo.id);
+              const { swatches, histogram } = await extractPhotoColors(photo.thumbUrl, photo.id);
               // 完了のたびに進捗を進める。失敗分も finally 相当で数えたいので、
               // rejected のときは下のループで別途足す。
               if (!cancelled) setProgress((prev) => ({ ...prev, done: prev.done + 1 }));
-              return { photoId: photo.id, version: PALETTE_VERSION, swatches };
+              return { photoId: photo.id, version: PALETTE_VERSION, swatches, histogram };
             },
           );
           if (cancelled) return;
@@ -302,13 +307,18 @@ function GroupsPage() {
         //    版が違うパレットは抽出条件が違うので距離を比べられない。抽出に失敗した写真
         //    （古い版のパレットが stored に残ったまま）や、新しい版で書かれた写真（降格
         //    させないためあえて再抽出しない）を混ぜないよう、版が一致するものだけを使う。
+        //    距離はヒストグラムで測るので、版が合っていても histogram が無い行は使えない。
         const ready: PhotoPalette[] = [];
+        const histogramEntries: { photoId: string; histogram: string }[] = [];
         for (const photo of photos) {
           const palette = stored.get(photo.id);
-          if (palette && palette.version === PALETTE_VERSION) ready.push(palette);
+          if (!palette || palette.version !== PALETTE_VERSION || !palette.histogram) continue;
+          ready.push({ photoId: palette.photoId, version: palette.version, swatches: palette.swatches });
+          histogramEntries.push({ photoId: palette.photoId, histogram: palette.histogram });
         }
         if (cancelled) return;
         setPalettes(ready);
+        setHistograms(histogramEntries);
         // 表示の手前にもう 1 段ある。距離行列は Worker で作るので、そちらの完了を待つ。
         setPhase("grouping");
       } catch (error) {
@@ -360,9 +370,8 @@ function GroupsPage() {
     const controller = new AbortController();
     void (async () => {
       try {
-        const built = await buildDistanceMatrixAsync(palettes, weighting, controller.signal);
+        const built = await buildDistanceMatrixAsync(histograms, controller.signal);
         if (controller.signal.aborted) return;
-        matrixWeightingRef.current = weighting;
         setMatrix(built);
         setPhase("ready");
       } catch (error) {
@@ -375,22 +384,15 @@ function GroupsPage() {
 
     // 画面を離れたら計算を捨てる。Worker も terminate されるので CPU を掴んだままにならない。
     return () => controller.abort();
-  }, [phase, palettes, weighting]);
-
-  // 重み付けを切り替えたら距離そのものが変わるので、行列を作り直す。
-  // 抽出済みのパレットはそのまま使えるため、grouping からやり直すだけでよい。
-  useEffect(() => {
-    if (phase === "ready" && matrixWeightingRef.current !== weighting) setPhase("grouping");
-  }, [phase, weighting]);
+  }, [phase, histograms]);
 
   // しきい値・枚数・方式を変えたときはここだけが走る（距離計算はやり直さない）。
   const groups = useMemo(() => {
     if (!matrix) return [];
-    // 「1 グループの枚数」からグループ数へ換算する。k-medoids のグループは
-    // きっちり等分にはならないので、枚数は「おおよその目安」になる。
-    const count = Math.max(1, Math.ceil(palettes.length / committedSize));
+    // 枚数モードは平均連結法で分けたあと、目標の 2 倍を超えた組だけ割り直す。
+    // 割り直すぶんグループ数は目安より増えるが、そのぶん粒が揃う。
     return mode === "count"
-      ? groupByCount(palettes, matrix, count)
+      ? groupByTargetSize(palettes, matrix, committedSize)
       : groupByThreshold(palettes, matrix, committedThreshold);
   }, [matrix, palettes, mode, committedThreshold, committedSize]);
 
@@ -447,17 +449,6 @@ function GroupsPage() {
       replace: true,
     });
   }, [navigate, draftSize]);
-
-  /** 差し色重視の重み付けを切り替える。オフのときは URL を汚さないよう undefined にする。 */
-  const toggleAccent = useCallback(
-    (checked: boolean) => {
-      void navigate({
-        search: (prev) => ({ ...prev, accent: checked ? true : undefined }),
-        replace: true,
-      });
-    },
-    [navigate],
-  );
 
   /** 方式を切り替える。既定（threshold）のときは URL を汚さないよう undefined にする。 */
   const switchMode = useCallback(
@@ -544,20 +535,6 @@ function GroupsPage() {
             <span className="tabular-nums">約 {draftSize} 枚</span>
           </label>
         )}
-
-        {/* 差し色重視。ほぼ黒い写真の中の一箇所の赤のような、面積は小さくても
-            彩度の高い色を距離に強く効かせる。切り替えると距離行列を作り直す。 */}
-        <label
-          className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
-          title="面積が小さくても彩度の高い色（差し色）を強く効かせて比べます"
-        >
-          <Checkbox
-            checked={search.accent === true}
-            onCheckedChange={(checked) => toggleAccent(checked === true)}
-            disabled={phase !== "ready"}
-          />
-          差し色を重視
-        </label>
 
         {/* 抽出アルゴリズムを変えたときや、結果に納得がいかないときの手動やり直し。
             保存済みのパレットを無視して全部取り直すので、枚数ぶんの時間がかかる。 */}

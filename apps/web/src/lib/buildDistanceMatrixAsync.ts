@@ -3,12 +3,35 @@
 // このモジュールは SSR でも評価されうる（ルートから import されるため）。
 // Worker の生成は必ず関数の呼び出し時に行い、トップレベルでは self / Worker に触れない。
 
-import type { DistanceMatrix, PaletteWeighting, PhotoPalette } from "@dragonfly/core";
-import { buildDistanceMatrix, reshapeDistanceMatrix } from "@dragonfly/core";
+import type { DistanceMatrix, PhotoHistogram } from "@dragonfly/core";
+import {
+  HISTOGRAM_VERSION,
+  buildHistogramMatrixFlat,
+  decodeHistogram,
+  reshapeDistanceMatrix,
+} from "@dragonfly/core";
 import type { DistanceMatrixRequest, DistanceMatrixResponse } from "./distanceMatrixWorker";
 
 /** 応答と要求を対応付ける連番。同時に 1 本しか投げないが、取り違えないための保険。 */
 let nextRequestId = 1;
+
+/** 距離行列の入力。photoId は失敗したときにどの写真かを言うためだけに持つ。 */
+export interface HistogramEntry {
+  photoId: string;
+  /** encodeHistogram の base64。 */
+  histogram: string;
+}
+
+/** メインスレッドで計算する退避経路。Worker が使えないときだけ通る。 */
+function buildOnMainThread(entries: HistogramEntry[]): DistanceMatrix {
+  const decoded: PhotoHistogram[] = [];
+  for (const entry of entries) {
+    const bins = decodeHistogram(entry.histogram);
+    if (bins === null) throw new Error(`ヒストグラムを読めませんでした (${entry.photoId})`);
+    decoded.push({ photoId: entry.photoId, version: HISTOGRAM_VERSION, bins });
+  }
+  return reshapeDistanceMatrix(buildHistogramMatrixFlat(decoded), decoded.length);
+}
 
 /**
  * 距離行列を Worker で作る。
@@ -20,12 +43,11 @@ let nextRequestId = 1;
  *               中断すると AbortError を投げ、Worker も即座に終了させる。
  */
 export function buildDistanceMatrixAsync(
-  palettes: PhotoPalette[],
-  weighting: PaletteWeighting,
+  entries: HistogramEntry[],
   signal?: AbortSignal,
 ): Promise<DistanceMatrix> {
   // 空なら Worker を起こす意味がない。
-  if (palettes.length === 0) return Promise.resolve([]);
+  if (entries.length === 0) return Promise.resolve([]);
 
   let worker: Worker;
   try {
@@ -36,7 +58,7 @@ export function buildDistanceMatrixAsync(
     });
   } catch {
     // Worker が作れない環境ではメインスレッドで計算する（枚数が多いと固まるが、動かないよりはよい）。
-    return Promise.resolve(buildDistanceMatrix(palettes, weighting));
+    return Promise.resolve(buildOnMainThread(entries));
   }
 
   return new Promise<DistanceMatrix>((resolve, reject) => {
@@ -65,7 +87,7 @@ export function buildDistanceMatrixAsync(
       cleanup();
       // Worker の読み込み自体に失敗しても new Worker() は投げないので、上の catch では拾えない。
       // 実際にはこちらの方が起きやすいため、同じくメインスレッドの同期版に落とす。
-      resolve(buildDistanceMatrix(palettes, weighting));
+      resolve(buildOnMainThread(entries));
     };
 
     const onAbort = () => {
@@ -82,6 +104,6 @@ export function buildDistanceMatrixAsync(
     worker.addEventListener("error", onError);
     signal?.addEventListener("abort", onAbort);
 
-    worker.postMessage({ id, palettes, weighting } satisfies DistanceMatrixRequest);
+    worker.postMessage({ id, histograms: entries } satisfies DistanceMatrixRequest);
   });
 }

@@ -6,15 +6,19 @@
 // 受け渡しは flat な Float64Array で行う。TypedArray は transfer できるので、
 // 4,000,000 要素（2000 枚 = 32MB）でもコピーが発生しない。
 
-import type { PaletteWeighting, PhotoPalette } from "@dragonfly/core";
-import { buildDistanceMatrixFlat } from "@dragonfly/core";
+import type { PhotoHistogram } from "@dragonfly/core";
+import { HISTOGRAM_VERSION, buildHistogramMatrixFlat, decodeHistogram } from "@dragonfly/core";
 
-/** メインスレッドから受け取る要求。id は応答を要求と対応付けるためだけのもの。 */
+/**
+ * メインスレッドから受け取る要求。id は応答を要求と対応付けるためだけのもの。
+ *
+ * ヒストグラムは base64 のまま渡す。Float64Array を 2000 個送るより構造化クローンが軽く、
+ * デコードは Worker 側で n 回（n^2 ではない）しか走らない。
+ */
 export type DistanceMatrixRequest = {
   id: number;
-  palettes: PhotoPalette[];
-  /** 距離の重み付け。面積（area）かアクセント色重視（accent）か。 */
-  weighting: PaletteWeighting;
+  /** photoId と base64 ヒストグラムの組。並び順が距離行列の添字になる。 */
+  histograms: { photoId: string; histogram: string }[];
 };
 
 /** Worker が返す応答。成功なら flat 行列、失敗なら理由を返す。 */
@@ -38,11 +42,19 @@ const workerScope = self as unknown as {
 };
 
 workerScope.addEventListener("message", (event) => {
-  const { id, palettes, weighting } = event.data;
+  const { id, histograms } = event.data;
   try {
-    const flat = buildDistanceMatrixFlat(palettes, weighting);
+    const decoded: PhotoHistogram[] = [];
+    for (const entry of histograms) {
+      const bins = decodeHistogram(entry.histogram);
+      // 壊れた行だけを落とすと添字が呼び出し側とずれるので、ここでは落とさず投げる。
+      // 呼び出し側が「ヒストグラムのある写真だけ」を渡す前提。
+      if (bins === null) throw new Error(`ヒストグラムを読めませんでした (${entry.photoId})`);
+      decoded.push({ photoId: entry.photoId, version: HISTOGRAM_VERSION, bins });
+    }
+    const flat = buildHistogramMatrixFlat(decoded);
     // バッファごと譲渡する。以後この Worker 側から flat は読めなくなるが、返した時点で用済み。
-    workerScope.postMessage({ id, ok: true, flat, size: palettes.length }, [flat.buffer]);
+    workerScope.postMessage({ id, ok: true, flat, size: decoded.length }, [flat.buffer]);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     workerScope.postMessage({ id, ok: false, message });

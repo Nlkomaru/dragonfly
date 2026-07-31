@@ -13,3 +13,11 @@ routeTree.gen.ts
 .DS_Store
 .tauri/
 .vrc
+
+# marimo ノートブック (notebooks/) の作業用
+notebooks/.venv/
+# API から取ってきた自分の写真のサムネイル。リポジトリには入れない。
+notebooks/remote/
+notebooks/__marimo__/
+__pycache__/
+.pytest_cache/

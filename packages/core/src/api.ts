@@ -180,6 +180,11 @@ export interface ApiPhotoPalette {
   /** 抽出アルゴリズムの版。古ければクライアントが抽出し直して上書きする。 */
   version: number;
   swatches: PaletteSwatch[];
+  /**
+   * 色ヒストグラムの base64 (`encodeHistogram` の出力)。距離の計算に使う。
+   * 版が古いパレットには入っていないので任意。
+   */
+  histogram?: string;
 }
 
 /** そのユーザーが持つ全パレット。写真一覧と突き合わせて未抽出の写真を割り出す。 */

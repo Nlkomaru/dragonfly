@@ -27,6 +27,7 @@ export async function listPalettes(
       photoId: photoPalettes.photoId,
       version: photoPalettes.version,
       swatches: photoPalettes.swatches,
+      histogram: photoPalettes.histogram,
     })
     .from(photoPalettes)
     .where(eq(photoPalettes.ownerId, ownerId));
@@ -38,6 +39,8 @@ export async function listPalettes(
         photoId: row.photoId,
         version: row.version,
         swatches: JSON.parse(row.swatches) as PaletteSwatch[],
+        // 古い行には入っていない。undefined にしておけば「未抽出」として扱われる。
+        ...(row.histogram ? { histogram: row.histogram } : {}),
       });
     } catch {
       // 返さなければクライアントは「未抽出」として扱い、抽出し直して上書きしてくれる。
@@ -82,6 +85,7 @@ export async function upsertPalettes(
   for (const palette of unique.values()) {
     if (!ownedIds.has(palette.photoId)) continue;
     const swatches = JSON.stringify(palette.swatches);
+    const histogram = palette.histogram ?? null;
     statements.push(
       db
         .insert(photoPalettes)
@@ -90,12 +94,13 @@ export async function upsertPalettes(
           ownerId,
           version: palette.version,
           swatches,
+          histogram,
           updatedAt: now,
         })
         // 抽出をやり直した結果で上書きする。owner_id は変わらないので触らない。
         .onConflictDoUpdate({
           target: photoPalettes.photoId,
-          set: { version: palette.version, swatches, updatedAt: now },
+          set: { version: palette.version, swatches, histogram, updatedAt: now },
         }),
     );
   }
