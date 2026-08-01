@@ -20,8 +20,9 @@ concurrency:
 
 env:
   # R2 は S3 互換 API なので aws-cli をそのまま使う。エンドポイントとバケットは secret から取る。
-  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY は BSM(nikomaru プロジェクト)管理に移行済みで、
+  # ワークフロー起動時にまだ値を取得していないためここでは設定できず、
+  # 実際に使う assets ジョブ内で bitwarden/sm-action 実行後に env として渡す。
   AWS_REGION: ${{ secrets.AWS_REGION }}
   # GitHub Actions のランナーで EC2 のメタデータ取得を試みて待たされるのを防ぐ。
   AWS_EC2_METADATA_DISABLED: true
@@ -120,6 +121,16 @@ jobs:
         env:
           STORYBOOK_BASE_PATH: /dragonfly/${{ steps.vars.outputs.commit_sha }}/storybook/
         run: pnpm build-storybook
+
+      # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY は BSM(nikomaru プロジェクト)管理に移行済み。
+      # 以降のステップの env に入るため、Upload to R2 の env: では改めて渡す必要はない。
+      - name: Get secrets from Bitwarden Secrets Manager
+        uses: bitwarden/sm-action@v2
+        with:
+          access_token: ${{ secrets.NIKOMARU_BITWARDEN_SECRET_MANAGER_ACCESS_TOKEN }}
+          secrets: |
+            7fca16ab-3904-4706-9849-b49900de563a > AWS_ACCESS_KEY_ID
+            769a462b-bf2d-466c-ae1f-b49900de56c8 > AWS_SECRET_ACCESS_KEY
 
       - name: Upload to R2
         env:
