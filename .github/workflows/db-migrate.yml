@@ -45,7 +45,7 @@ jobs:
         with:
           access_token: ${{ secrets.NIKOMARU_BITWARDEN_SECRET_MANAGER_ACCESS_TOKEN }}
           secrets: |
-            1d10a8b9-8326-47e3-863f-b49900de5893 > CLOUDFLARE_API_TOKEN
+            f1bf4fa4-0288-4a31-b28b-b499013acdce > CLOUDFLARE_API_TOKEN
             2bad9e23-82af-4fba-b514-b49900e1632f > CLOUDFLARE_ACCOUNT_ID
 
       - name: List pending migrations
