@@ -38,15 +38,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID は BSM(nikomaru プロジェクト)管理に移行済み。
+      # 以降のステップの env に入るため、run: 側で改めて渡す必要はない。
+      - name: Get secrets from Bitwarden Secrets Manager
+        uses: bitwarden/sm-action@v2
+        with:
+          access_token: ${{ secrets.NIKOMARU_BITWARDEN_SECRET_MANAGER_ACCESS_TOKEN }}
+          secrets: |
+            1d10a8b9-8326-47e3-863f-b49900de5893 > CLOUDFLARE_API_TOKEN
+            2bad9e23-82af-4fba-b514-b49900e1632f > CLOUDFLARE_ACCOUNT_ID
+
       - name: List pending migrations
         run: pnpm --dir apps/web exec wrangler d1 migrations list dragonfly --remote
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Apply migrations
         if: ${{ !inputs.dry_run }}
         run: pnpm --dir apps/web exec wrangler d1 migrations apply dragonfly --remote
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
