@@ -6,6 +6,8 @@ import {
   Clock,
   Globe,
   Loader2,
+  RotateCcw,
+  RotateCw,
   Tag,
   Trash2,
   Users,
@@ -36,6 +38,13 @@ export interface PhotoLightboxProps {
    */
   onDelete?: () => void;
   /**
+   * 回転の要求（時計回りの度数）。渡したときだけ回転ボタンを出す。
+   * 実際の回転はサーバー側の仕事で、ここでは押されたことを伝えるだけ。
+   */
+  onRotate?: (degrees: 90 | 270) => void;
+  /** 回転を処理中かどうか。処理中は回転・削除ボタンを無効にする。 */
+  rotatePending?: boolean;
+  /**
    * 情報パネルを出すかどうか。true にすると画像を左上に寄せ、
    * 右と下に撮影情報・タグを並べる（Web ギャラリー向け）。
    */
@@ -65,6 +74,8 @@ export function PhotoLightbox({
   onPrev,
   onNext,
   onDelete,
+  onRotate,
+  rotatePending = false,
   showInfo = false,
   tags = [],
   onTagsChange,
@@ -150,18 +161,57 @@ export function PhotoLightbox({
           {/* 右上のボタン列。削除と閉じるを 1 本にまとめ、
               削除の有無で閉じるボタンの位置が動かないようにする。 */}
           <div className="absolute top-4 right-4 flex items-center gap-1">
+            {onRotate ? (
+              <>
+                <button
+                  type="button"
+                  aria-label="左に回転"
+                  title="左に回転"
+                  disabled={rotatePending}
+                  onClick={(event) => {
+                    // 画像エリアのクリック（＝閉じる）に飲まれないようにする。
+                    event.stopPropagation();
+                    // 左回転 = 反時計回り 90 度 = 時計回り 270 度。
+                    onRotate(270);
+                  }}
+                  className="rounded-full p-2 text-white/80 transition-colors hover:bg-white/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:pointer-events-none disabled:opacity-50"
+                >
+                  <RotateCcw className="size-5" aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  aria-label="右に回転"
+                  title="右に回転"
+                  disabled={rotatePending}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onRotate(90);
+                  }}
+                  className="rounded-full p-2 text-white/80 transition-colors hover:bg-white/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:pointer-events-none disabled:opacity-50"
+                >
+                  {/* 処理中は右回転側だけスピナーにして「働いている」ことを示す。 */}
+                  {rotatePending ? (
+                    <Loader2 className="size-5 animate-spin" aria-hidden />
+                  ) : (
+                    <RotateCw className="size-5" aria-hidden />
+                  )}
+                </button>
+              </>
+            ) : null}
             {onDelete ? (
               <button
                 type="button"
                 aria-label="削除"
                 title="削除"
+                // 回転の上書きと削除が同時に走ると結果が不定になるので、処理中は止める。
+                disabled={rotatePending}
                 onClick={(event) => {
                   // 画像エリアのクリック（＝閉じる）に飲まれると、
                   // 呼び出し側の確認ダイアログを出す前に閉じてしまう。
                   event.stopPropagation();
                   onDelete();
                 }}
-                className="rounded-full p-2 text-white/80 transition-colors hover:bg-destructive hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                className="rounded-full p-2 text-white/80 transition-colors hover:bg-destructive hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:pointer-events-none disabled:opacity-50"
               >
                 <Trash2 className="size-5" aria-hidden />
               </button>

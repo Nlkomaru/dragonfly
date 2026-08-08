@@ -104,6 +104,15 @@ export interface ApiPhoto {
   blurhash: string | null;
 }
 
+/**
+ * 写真の回転要求。R2 上の実体（本体とサムネイル）を回転して上書きする。
+ * 応答は更新後の ApiPhoto（width / height / byteSize / URL が変わる）。
+ */
+export interface RotatePhotoRequest {
+  /** 時計回りの度数。 */
+  degrees: import("./rotate").RotationDegrees;
+}
+
 /** 写真 1 枚のタグを置き換える要求。ここに無いタグはその写真から外れる。 */
 export interface PutPhotoTagsRequest {
   tags: string[];

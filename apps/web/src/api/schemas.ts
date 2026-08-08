@@ -117,6 +117,16 @@ export const PutPhotoTagsResponseSchema = z.object({
   tags: z.array(z.string()).meta({ description: "反映後のタグ" }),
 });
 
+/**
+ * POST /photos/:photoId/rotate のボディ。
+ * 度数は時計回り。90 の倍数以外は回転後の実寸が定義できないので受け付けない。
+ */
+export const RotatePhotoRequestSchema = z.object({
+  degrees: z
+    .union([z.literal(90), z.literal(180), z.literal(270)])
+    .meta({ description: "時計回りの回転角（度）", example: 90 }),
+});
+
 // ---------------------------------------------------------------------------
 // カラーパレット
 // ---------------------------------------------------------------------------

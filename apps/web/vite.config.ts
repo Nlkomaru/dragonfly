@@ -20,7 +20,11 @@ export default defineConfig({
     rollupOptions: {
       // `cloudflare:workers` は Workers ランタイムが提供する組み込みモジュール。
       // バンドルせず、そのまま import として残す。
-      external: ["cloudflare:workers"],
+      //
+      // `@jsquash/avif` は .wasm を import する（Workers では WebAssembly.Module になる）。
+      // Vite は .wasm をモジュールとして扱えないので、JS ごと external に残し、
+      // `wrangler deploy` の esbuild（既定ルール CompiledWasm）に解決させる。
+      external: ["cloudflare:workers", /^@jsquash\/avif/],
     },
   },
   plugins: [

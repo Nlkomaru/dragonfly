@@ -148,6 +148,7 @@ describe("documentation", () => {
       "/api/v1/users/{id}/photos/check",
       "/api/v1/users/{id}/photos/{photoId}",
       "/api/v1/users/{id}/photos/{photoId}/image",
+      "/api/v1/users/{id}/photos/{photoId}/rotate",
       "/api/v1/users/{id}/photos/{photoId}/tags",
       "/api/v1/users/{id}/photos/{photoId}/thumb",
       "/api/v1/users/{id}/tags",

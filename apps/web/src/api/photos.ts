@@ -18,6 +18,7 @@ import {
   ListPhotosQuerySchema,
   ListPhotosResponseSchema,
   ListTagsResponseSchema,
+  RotatePhotoRequestSchema,
   PutPhotoTagsRequestSchema,
   PutPhotoTagsResponseSchema,
   UploadPhotoMetadataSchema,
@@ -28,8 +29,10 @@ import {
 import type { ApiEnv } from "./middleware";
 import { requireAuth, requireAuthOrSignedPhoto, resolveOwner } from "./middleware";
 import {
+  applyPhotoRotation,
   deletePhoto,
   deletePhotoBySourceHash,
+  findPhotoKeys,
   findUploadedHashes,
   getPhoto,
   insertPhoto,
@@ -371,6 +374,81 @@ photosRouter.delete(
       c.get("photos").delete(keys.thumbKey ? [keys.r2Key, keys.thumbKey] : [keys.r2Key]),
     );
     return c.body(null, 204);
+  },
+);
+
+photosRouter.post(
+  "/users/:id/photos/:photoId/rotate",
+  describeRoute({
+    tags: ["photos"],
+    summary: "写真の回転",
+    description:
+      "R2 上の実体（本体とサムネイル）を指定した角度だけ時計回りに回転し、その場で上書きする。" +
+      "DB に回転角は持たず、width / height / byteSize を実体に合わせて更新する。" +
+      "AVIF は無損失回転ができないため再エンコードになり、繰り返すと画質は少しずつ落ちる。" +
+      "BlurHash は無効になるので消し、ブラウザが後から計算し直す。" +
+      "応答は更新後の写真（署名 URL も新しくなる）。",
+    responses: {
+      200: {
+        description: "回転を反映した写真",
+        content: { "application/json": { schema: resolver(ApiPhotoSchema) } },
+      },
+      400: {
+        description: "回転角が 90 / 180 / 270 以外",
+        content: { "application/json": { schema: resolver(ErrorResponseSchema) } },
+      },
+      ...notFoundResponse,
+      ...commonErrorResponses,
+    },
+  }),
+  validator("param", UserPhotoParamSchema),
+  validator("json", RotatePhotoRequestSchema),
+  async (c) => {
+    const ownerId = c.get("ownerId");
+    const photoId = c.req.param("photoId");
+    const { degrees } = c.req.valid("json");
+
+    // 所有者条件込みで引くので、他人の写真 ID は 404 になる。
+    const keys = await findPhotoKeys(c.get("db"), ownerId, photoId);
+    if (!keys) throw new HTTPException(404, { message: "photo not found" });
+
+    const bucket = c.get("photos");
+    const object = await bucket.get(keys.r2Key);
+    if (!object) throw new HTTPException(404, { message: "object not found" });
+
+    // wasm を含むモジュールは Node の vitest から静的に辿れると壊れるので遅延で読む。
+    const { rotateAvif } = await import("../server/avif");
+
+    // 先に本体・サムネイルの両方を回転し切ってから書き込む。
+    // 片方だけ上書きした状態で失敗すると、向きの食い違いが残ってしまうため。
+    const image = await rotateAvif(await object.arrayBuffer(), degrees);
+    let thumb: Awaited<ReturnType<typeof rotateAvif>> | null = null;
+    if (keys.thumbKey) {
+      const thumbObject = await bucket.get(keys.thumbKey);
+      if (thumbObject) thumb = await rotateAvif(await thumbObject.arrayBuffer(), degrees);
+    }
+
+    // キーは変換前 PNG の sha256 なので、回転しても同じキーへの上書きでよい
+    // （identity と重複判定は変換前の画像に対するもので、回転では変わらない）。
+    await bucket.put(keys.r2Key, image.bytes, {
+      httpMetadata: { contentType: "image/avif" },
+    });
+    if (keys.thumbKey && thumb) {
+      await bucket.put(keys.thumbKey, thumb.bytes, {
+        httpMetadata: { contentType: "image/avif" },
+      });
+    }
+
+    await applyPhotoRotation(c.get("db"), ownerId, photoId, {
+      width: image.width,
+      height: image.height,
+      byteSize: image.bytes.byteLength,
+    });
+
+    // 更新後の行から組み立て直す。署名 URL も新しい exp で発行される。
+    const photo = await getPhoto(c.get("db"), ownerId, photoId, c.env.BETTER_AUTH_SECRET);
+    if (!photo) throw new HTTPException(404, { message: "photo not found" });
+    return c.json(photo);
   },
 );
 
