@@ -21,6 +21,7 @@ export type {
   ConvertProgress,
   ApiPhoto,
   ListPhotosResponse,
+  RotatePhotoRequest,
   PutPhotoTagsRequest,
   PutPhotoTagsResponse,
   ListTagsResponse,
@@ -78,6 +79,9 @@ export {
   decodeBlurhashToRgba,
   isValidBlurhash,
 } from "./blurhash";
+
+export type { RgbaImage, RotationDegrees } from "./rotate";
+export { ROTATION_DEGREES, rotateRgba } from "./rotate";
 
 export type { AppSettings } from "./settings";
 export { DEFAULT_SETTINGS } from "./settings";

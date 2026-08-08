@@ -195,6 +195,9 @@ function GalleryPage() {
   const [deleteTarget, setDeleteTarget] = useState<Photo | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // 回転を処理中の写真 ID。処理中は拡大表示の回転・削除ボタンを止める。
+  const [rotatingId, setRotatingId] = useState<string | null>(null);
+  const [rotateError, setRotateError] = useState<string | null>(null);
 
   // 絞り込みの選択肢（ワールド / VRChat ユーザー）。ID を覚えていなくても名前で選べるようにする。
   const [facets, setFacets] = useState<ListFacetsResponse>({ worlds: [], players: [] });
@@ -601,6 +604,54 @@ function GalleryPage() {
     }
   }, [deleteTarget, search.photo, closeDetail]);
 
+  /**
+   * 写真を回転する。R2 上の実体を上書きするサーバー処理で、元には戻せる
+   * （逆方向にもう一度回せばよい）が、再エンコードのぶん画質は少しずつ落ちる。
+   * 成功したら応答の ApiPhoto で手元を差し替える。URL（署名）も新しくなるので、
+   * ブラウザのキャッシュに残った回転前の画像を掴み続けることはない。
+   */
+  const rotatePhoto = useCallback(
+    async (photo: Photo, degrees: 90 | 270) => {
+      const photoId = photo.path;
+      setRotatingId(photoId);
+      setRotateError(null);
+      try {
+        const res = await fetch(
+          `/api/v1/users/me/photos/${encodeURIComponent(photoId)}/rotate`,
+          {
+            method: "POST",
+            credentials: "include",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ degrees }),
+          },
+        );
+        if (!res.ok) throw new Error(`写真を回転できませんでした (${res.status})`);
+        const body = (await res.json()) as ApiPhoto;
+
+        // loader は staleTime 中に再実行されないので、タグ保存と同じく手元を直接書き換える。
+        setApiPhotos((prev) => prev.map((p) => (p.id === body.id ? body : p)));
+        setDetailExtra((prev) => (prev && prev.id === body.id ? body : prev));
+        // 拡大表示中の Photo は ApiPhoto から導出した別物なので、こちらも作り直す。
+        setPreviewPhoto((prev) => (prev && prev.path === body.id ? apiPhotoToPhoto(body) : prev));
+
+        // 回転で BlurHash は無効になる（サーバー側でも null に戻る）。
+        // この画面で計算した値と「計算済み」の印も消して、バックフィルに計算し直させる。
+        attemptedBlurhashRef.current.delete(body.id);
+        setComputedBlurhashes((prev) => {
+          if (!prev.has(body.id)) return prev;
+          const next = new Map(prev);
+          next.delete(body.id);
+          return next;
+        });
+      } catch (error) {
+        setRotateError(error instanceof Error ? error.message : "写真を回転できませんでした");
+      } finally {
+        setRotatingId(null);
+      }
+    },
+    [],
+  );
+
   /** 選択式のフィルタ（ワールド / プレイヤー / タグ）をその場で URL に反映する。 */
   const applyFacet = useCallback(
     (key: "world" | "player" | "tag", value: string | undefined) => {
@@ -805,6 +856,10 @@ function GalleryPage() {
         onPrev={() => stepPreview(-1)}
         onNext={() => stepPreview(1)}
         onDelete={previewPhoto ? () => requestDelete(previewPhoto) : undefined}
+        onRotate={
+          previewPhoto ? (degrees) => void rotatePhoto(previewPhoto, degrees) : undefined
+        }
+        rotatePending={rotatingId !== null && rotatingId === previewPhoto?.path}
         showInfo
         tags={previewPhoto ? tagsFor(previewPhoto.path) : []}
         onTagsChange={
@@ -876,6 +931,11 @@ function GalleryPage() {
       {tagError ? (
         <p className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-md bg-destructive px-3 py-1.5 text-sm text-destructive-foreground shadow">
           {tagError}
+        </p>
+      ) : null}
+      {rotateError ? (
+        <p className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-md bg-destructive px-3 py-1.5 text-sm text-destructive-foreground shadow">
+          {rotateError}
         </p>
       ) : null}
     </div>

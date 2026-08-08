@@ -48,3 +48,13 @@ export const WithInfo: Story = {
 export const WithDelete: Story = {
   args: { onPrev: () => {}, onNext: () => {}, onDelete: () => {} },
 };
+
+/** 回転できる状態。左右の回転ボタンが閉じるボタンの並びに出る。 */
+export const WithRotate: Story = {
+  args: { onPrev: () => {}, onNext: () => {}, onDelete: () => {}, onRotate: () => {} },
+};
+
+/** 回転の処理中。回転・削除ボタンが無効になり、右回転側がスピナーになる。 */
+export const RotatePending: Story = {
+  args: { onDelete: () => {}, onRotate: () => {}, rotatePending: true },
+};

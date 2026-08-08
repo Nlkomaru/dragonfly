@@ -610,6 +610,26 @@ export async function findPhotoKeys(
 }
 
 /**
+ * R2 上の実体を回転した後の行の更新。
+ *
+ * 90 / 270 度では width と height が入れ替わり、再エンコードで byteSize も変わる。
+ * blurhash は空間情報なので回転で無効になる。null に戻せば、ギャラリーを開いたときに
+ * ブラウザ側のバックフィルが新しいサムネイルから計算し直す（upsertBlurhashes 参照）。
+ * パレット / ヒストグラムは色分布で回転不変なので触らない。
+ */
+export async function applyPhotoRotation(
+  db: DrizzleDb,
+  ownerId: string,
+  photoId: string,
+  update: { width: number; height: number; byteSize: number },
+): Promise<void> {
+  await db
+    .update(photos)
+    .set({ ...update, blurhash: null })
+    .where(and(eq(photos.id, photoId), eq(photos.ownerId, ownerId)));
+}
+
+/**
  * 写真を削除する。photo_players / photo_tags / photo_palettes は ON DELETE CASCADE で
  * 消えるが、D1 は既定で外部キーが有効でない場合があるため、明示的に同じ batch で消しておく。
  * 特にパレットは owner_id だけで一覧されるので、残ると /groups が実体の無い写真を掴む。
