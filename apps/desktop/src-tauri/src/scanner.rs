@@ -56,6 +56,34 @@ pub struct ScanResult {
     pub skipped_count: usize,
     /// 実際に走査したディレクトリ。
     pub root_dir: String,
+    /// キャッシュへ保存する除外ファイルの指紋。IPC には出さない。
+    #[serde(skip)]
+    pub(crate) skipped_files: Vec<SkippedFile>,
+}
+
+/// メタデータが無く一覧から除外した PNG の指紋。
+#[derive(Debug, Clone)]
+pub(crate) struct SkippedFile {
+    pub(crate) path: String,
+    pub(crate) mtime_millis: i64,
+    pub(crate) size: u64,
+}
+
+/// 走査結果のキャッシュから復元した写真の指紋。
+#[derive(Debug, Clone)]
+pub(crate) struct CachedPhoto {
+    pub(crate) photo: Photo,
+    pub(crate) mtime_millis: i64,
+    pub(crate) size: u64,
+}
+
+/// キャッシュ済みの一覧と、除外ファイルのマニフェスト。
+#[derive(Debug, Clone)]
+pub(crate) struct CachedScan {
+    pub(crate) photos: Vec<CachedPhoto>,
+    pub(crate) skipped_files: Vec<SkippedFile>,
+    pub(crate) skipped_count: usize,
+    pub(crate) root_dir: String,
 }
 
 /// 走査の進捗。フロントエンドは処理済み件数と総数でバーを描く。
@@ -192,9 +220,8 @@ pub fn allow_root_dir_asset_scope(app: &AppHandle) -> Result<(), String> {
         })
 }
 
-/// 1ファイルを [`Photo`] に変換する。メタデータが無ければ None。
-fn build_photo(path: &Path) -> Option<Photo> {
-    let file_meta = std::fs::metadata(path).ok()?;
+/// 取得済みのファイル属性を使って 1 ファイルを [`Photo`] に変換する。
+fn build_photo_with_file_meta(path: &Path, file_meta: &std::fs::Metadata) -> Option<Photo> {
     let byte_size = file_meta.len();
 
     // まず先頭だけ読む。テキストチャンクが後ろにある稀なケースだけ全体を読み直す。
@@ -209,7 +236,7 @@ fn build_photo(path: &Path) -> Option<Photo> {
     let parsed = parse_vrchat_file_name(&file_name);
 
     // 撮影日時はファイル名優先、駄目なら mtime。
-    let taken_at = parsed.taken_at.or_else(|| mtime_millis(&file_meta))?;
+    let taken_at = parsed.taken_at.or_else(|| mtime_millis(file_meta))?;
     // 解像度もファイル名優先で、無ければ IHDR の値を使う。
     let width = parsed.width.unwrap_or(png_meta.width);
     let height = parsed.height.unwrap_or(png_meta.height);
@@ -218,7 +245,7 @@ fn build_photo(path: &Path) -> Option<Photo> {
         path: path.to_string_lossy().into_owned(),
         file_name,
         taken_at,
-        // 月は必ず最終的な takenAt から導く。mtime にフォールバックした場合も整合させるため。
+        // 月は必ず最終的な taken_at から導く。mtime にフォールバックした場合も整合させるため。
         month: to_month_key(taken_at),
         width,
         height,
@@ -227,6 +254,11 @@ fn build_photo(path: &Path) -> Option<Photo> {
         sha256: None,
         uploaded: false,
     })
+}
+
+/// ファイル属性からキャッシュ比較用の指紋を作る。
+fn file_stamp(file_meta: &std::fs::Metadata) -> Option<(i64, u64)> {
+    Some((mtime_millis(file_meta)?, file_meta.len()))
 }
 
 /// ファイル更新時刻を unix ミリ秒で返す。
@@ -269,14 +301,89 @@ fn collect_png_paths(root: &Path) -> Vec<PathBuf> {
 
 /// ルート配下を走査して [`ScanResult`] を組み立てる。進捗は `emit` 経由で通知する。
 pub fn scan_directory(root: &Path, emit: impl Fn(ScanProgress) + Sync + Send) -> ScanResult {
+    scan_directory_with_cache(root, None, emit)
+}
+
+/// キャッシュを利用してルート配下を差分走査する。
+///
+/// 当月・前月は編集や追加を確実に拾うため毎回 PNG を解析する。
+/// それより古い月は `(mtime, size)` が一致するキャッシュ行を再利用し、
+/// 過去写真のメタデータ読み込みを省く。
+fn scan_directory_with_cache(
+    root: &Path,
+    cache: Option<&CachedScan>,
+    emit: impl Fn(ScanProgress) + Sync + Send,
+) -> ScanResult {
     let paths = collect_png_paths(root);
     let total = paths.len();
     let processed = AtomicUsize::new(0);
+    let recent_months = recent_months();
+    let cached_photos = cache
+        .map(|value| {
+            value
+                .photos
+                .iter()
+                .map(|entry| (entry.photo.path.as_str(), entry))
+                .collect::<std::collections::HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let cached_skipped = cache
+        .map(|value| {
+            value
+                .skipped_files
+                .iter()
+                .map(|entry| (entry.path.as_str(), entry))
+                .collect::<std::collections::HashMap<_, _>>()
+        })
+        .unwrap_or_default();
 
-    let photos: Vec<Photo> = paths
+    let scanned: Vec<(Option<Photo>, Option<SkippedFile>)> = paths
         .par_iter()
-        .filter_map(|path| {
-            let photo = build_photo(path);
+        .map(|path| {
+            let file_meta = std::fs::metadata(path).ok();
+            let stamp = file_meta.as_ref().and_then(file_stamp);
+            let path_key = path.to_string_lossy();
+            let cached_photo = cached_photos.get(path_key.as_ref()).copied();
+            let cached_skipped = cached_skipped.get(path_key.as_ref()).copied();
+            let photo_is_recent = cached_photo.is_some_and(|entry| {
+                recent_months
+                    .iter()
+                    .any(|month| month == &entry.photo.month)
+            });
+            let skipped_is_recent =
+                cached_skipped.is_some() && is_recent_path(path, stamp, &recent_months);
+            let same_photo_stamp = cached_photo.is_some_and(|entry| {
+                stamp.is_some_and(|(mtime, size)| entry.mtime_millis == mtime && entry.size == size)
+            });
+            let same_skipped_stamp = cached_skipped.is_some_and(|entry| {
+                stamp.is_some_and(|(mtime, size)| entry.mtime_millis == mtime && entry.size == size)
+            });
+
+            let result = if let Some(entry) =
+                cached_photo.filter(|_| !photo_is_recent && same_photo_stamp)
+            {
+                (Some(entry.photo.clone()), None)
+            } else if let Some(entry) =
+                cached_skipped.filter(|_| !skipped_is_recent && same_skipped_stamp)
+            {
+                (
+                    None,
+                    Some(SkippedFile {
+                        path: entry.path.clone(),
+                        mtime_millis: entry.mtime_millis,
+                        size: entry.size,
+                    }),
+                )
+            } else {
+                match file_meta
+                    .as_ref()
+                    .and_then(|meta| build_photo_with_file_meta(path, meta))
+                {
+                    Some(photo) => (Some(photo), None),
+                    None => (None, Some(skipped_file(path, stamp))),
+                }
+            };
+
             let done = processed.fetch_add(1, Ordering::Relaxed) + 1;
             // 一定間隔と最後の1件だけ通知して、IPC の負荷を抑える。
             if done % PROGRESS_INTERVAL == 0 || done == total {
@@ -286,18 +393,64 @@ pub fn scan_directory(root: &Path, emit: impl Fn(ScanProgress) + Sync + Send) ->
                     current_path: path.to_string_lossy().into_owned(),
                 });
             }
-            photo
+            result
         })
         .collect();
 
-    let mut photos = photos;
+    let mut photos = Vec::with_capacity(scanned.len());
+    let mut skipped_files = Vec::new();
+    for (photo, skipped) in scanned {
+        if let Some(photo) = photo {
+            photos.push(photo);
+        }
+        if let Some(skipped) = skipped {
+            skipped_files.push(skipped);
+        }
+    }
     // 新しい写真を先頭に。フロントエンドでの並べ替えを省くため。
     photos.sort_by(|a, b| b.taken_at.cmp(&a.taken_at));
 
     ScanResult {
-        skipped_count: total - photos.len(),
+        skipped_count: skipped_files.len(),
         photos,
         root_dir: root.to_string_lossy().into_owned(),
+        skipped_files,
+    }
+}
+
+/// 当月と前月の月キーを返す。
+fn recent_months() -> [String; 2] {
+    use chrono::Datelike;
+    let now = Local::now();
+    let (year, month) = (now.year(), now.month());
+    let (previous_year, previous_month) = if month == 1 {
+        (year - 1, 12)
+    } else {
+        (year, month - 1)
+    };
+    [
+        format!("{year:04}-{month:02}"),
+        format!("{previous_year:04}-{previous_month:02}"),
+    ]
+}
+
+/// キャッシュ済み除外ファイルが当月・前月に属するかを判定する。
+fn is_recent_path(path: &Path, stamp: Option<(i64, u64)>, months: &[String; 2]) -> bool {
+    let file_name = path.file_name().and_then(|name| name.to_str());
+    let month = file_name
+        .and_then(|name| parse_vrchat_file_name(name).taken_at)
+        .or_else(|| stamp.map(|(mtime, _)| mtime))
+        .map(to_month_key);
+    month.is_none_or(|month| months.iter().any(|recent| recent == &month))
+}
+
+/// 走査から除外したファイルをキャッシュへ保存できる形にする。
+fn skipped_file(path: &Path, stamp: Option<(i64, u64)>) -> SkippedFile {
+    let (mtime_millis, size) = stamp.unwrap_or((-1, 0));
+    SkippedFile {
+        path: path.to_string_lossy().into_owned(),
+        mtime_millis,
+        size,
     }
 }
 
@@ -320,7 +473,10 @@ pub async fn scan_photos(app: AppHandle) -> Result<ScanResult, String> {
     // 走査は CPU / I/O ともに重いのでブロッキングプールへ逃がす。
     let handle = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let result = scan_directory(&root, |progress| {
+        let cached = crate::scan_cache::read_cached_scan(&handle)
+            .ok()
+            .filter(|value| value.root_dir == root.to_string_lossy());
+        let result = scan_directory_with_cache(&root, cached.as_ref(), |progress| {
             let _ = handle.emit(SCAN_PROGRESS_EVENT, progress);
         });
         // 次の起動で即座に一覧を出せるよう、結果をキャッシュへ残す。
@@ -336,6 +492,7 @@ pub async fn scan_photos(app: AppHandle) -> Result<ScanResult, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metadata::{PlayerRef, VrcxMetadata, WorldRef};
 
     #[test]
     fn parses_timestamp_and_resolution_from_file_name() {
@@ -412,5 +569,54 @@ mod tests {
             .unwrap()
             .timestamp_millis();
         assert_eq!(to_month_key(taken_at), "2024-01");
+    }
+    #[test]
+    fn unchanged_old_photo_is_reused_without_reading_its_png() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.png");
+        // PNG として壊れているため、再解析されれば一覧から除外される。
+        std::fs::write(&path, b"not a png").unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        let (mtime_millis, size) = file_stamp(&meta).unwrap();
+        let path_text = path.to_string_lossy().into_owned();
+        let cache = CachedScan {
+            photos: vec![CachedPhoto {
+                photo: Photo {
+                    path: path_text,
+                    file_name: "old.png".to_string(),
+                    taken_at: 946_684_800_000,
+                    month: "2000-01".to_string(),
+                    width: 1,
+                    height: 1,
+                    byte_size: size,
+                    metadata: VrcxMetadata {
+                        application: "VRCX".to_string(),
+                        version: 1,
+                        author: PlayerRef {
+                            id: "usr_1".to_string(),
+                            display_name: "author".to_string(),
+                        },
+                        world: WorldRef {
+                            id: "wrld_1".to_string(),
+                            name: "world".to_string(),
+                            instance_id: "1".to_string(),
+                        },
+                        players: Vec::new(),
+                    },
+                    sha256: None,
+                    uploaded: false,
+                },
+                mtime_millis,
+                size,
+            }],
+            skipped_files: Vec::new(),
+            skipped_count: 0,
+            root_dir: dir.path().to_string_lossy().into_owned(),
+        };
+
+        let result = scan_directory_with_cache(dir.path(), Some(&cache), |_| {});
+        assert_eq!(result.photos.len(), 1);
+        assert_eq!(result.photos[0].path, cache.photos[0].photo.path);
+        assert_eq!(result.skipped_count, 0);
     }
 }

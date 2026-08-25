@@ -16,7 +16,7 @@ use rusqlite::Connection;
 use serde::Deserialize;
 use tauri::{AppHandle, Manager};
 
-use crate::scanner::{Photo, ScanResult};
+use crate::scanner::{CachedPhoto, CachedScan, Photo, ScanResult, SkippedFile};
 
 /// キャッシュ DB のファイル名。走査し直せば作り直せるので app_cache_dir に置く。
 const CACHE_FILE: &str = "scan-cache.db";
@@ -82,6 +82,15 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
         )",
         [],
     )?;
+    // メタデータ無しで除外した PNG も指紋だけ保存し、古い月の再解析を防ぐ。
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS scan_skipped (
+            path  TEXT PRIMARY KEY,
+            mtime INTEGER NOT NULL,
+            size  INTEGER NOT NULL
+        )",
+        [],
+    )?;
     Ok(())
 }
 
@@ -98,88 +107,113 @@ fn open_cache(app: &AppHandle) -> Result<Connection, String> {
     Ok(conn)
 }
 
-/// キャッシュを [`ScanResult`] として読み出す。行が無ければ空の結果になる。
-///
-/// ファイルが今も実在するかは確かめない。起動を速くするのが目的で、
-/// 消えた写真は直後に走る本物の走査で一覧から消えるため。
-fn read_all(conn: &Connection) -> Result<ScanResult, String> {
+/// キャッシュを一覧と指紋のスナップショットとして読み出す。
+fn read_snapshot(conn: &Connection) -> Result<CachedScan, String> {
     let mut stmt = conn
-        .prepare("SELECT photo, sha256, uploaded FROM scan_cache")
+        .prepare("SELECT path, mtime, size, photo, sha256, uploaded FROM scan_cache")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
+                row.get::<_, i64>(1)?,
                 row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, i64>(5)?,
             ))
         })
         .map_err(|e| e.to_string())?;
 
-    let mut photos: Vec<Photo> = Vec::new();
+    let mut photos = Vec::new();
     for row in rows {
-        let (json, sha256, uploaded) = row.map_err(|e| e.to_string())?;
+        let (_path, mtime, size, json, sha256, uploaded) = row.map_err(|e| e.to_string())?;
         // 壊れた行は捨てるだけにする。1 行のために一覧全体を落とさない。
         let Ok(mut photo) = serde_json::from_str::<Photo>(&json) else {
             continue;
         };
-        // sha256 / uploaded は列の側が正。JSON は走査時点の値（None / false）のままなので、
-        // ここで必ず上書きする。これを外すと復元直後にバッジが全部消える。
+        // sha256 / uploaded は列の側が正。JSON は走査時点の値のままなので必ず上書きする。
         photo.sha256 = sha256;
         photo.uploaded = uploaded != 0;
-        photos.push(photo);
+        photos.push(CachedPhoto {
+            photo,
+            mtime_millis: mtime,
+            size: size as u64,
+        });
     }
-    // 並び順は走査結果と揃える（新しい写真が先頭）。
-    photos.sort_by(|a, b| b.taken_at.cmp(&a.taken_at));
 
+    let mut skipped_files = Vec::new();
+    let mut skipped_stmt = conn
+        .prepare("SELECT path, mtime, size FROM scan_skipped")
+        .map_err(|e| e.to_string())?;
+    let skipped_rows = skipped_stmt
+        .query_map([], |row| {
+            Ok(SkippedFile {
+                path: row.get(0)?,
+                mtime_millis: row.get(1)?,
+                size: row.get::<_, i64>(2)? as u64,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    for row in skipped_rows {
+        skipped_files.push(row.map_err(|e| e.to_string())?);
+    }
+
+    // 並び順は走査結果と揃える（新しい写真が先頭）。
+    photos.sort_by(|a, b| b.photo.taken_at.cmp(&a.photo.taken_at));
     let meta = conn
         .query_row(
             "SELECT skipped_count, root_dir FROM scan_meta WHERE id = 1",
             [],
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
         )
-        .unwrap_or((0, String::new()));
+        .unwrap_or((skipped_files.len() as i64, String::new()));
 
+    Ok(CachedScan {
+        photos,
+        skipped_files,
+        skipped_count: meta.0.max(0) as usize,
+        root_dir: meta.1,
+    })
+}
+
+/// キャッシュを [`ScanResult`] として読み出す。行が無ければ空の結果になる。
+fn read_all(conn: &Connection) -> Result<ScanResult, String> {
+    let cached = read_snapshot(conn)?;
+    let photos = cached.photos.into_iter().map(|entry| entry.photo).collect();
     Ok(ScanResult {
         photos,
-        skipped_count: meta.0 as usize,
-        root_dir: meta.1,
+        skipped_count: cached.skipped_count,
+        root_dir: cached.root_dir,
+        skipped_files: cached.skipped_files,
     })
 }
 
 /// 既存行の送信状態を、引き継ぎ判定に使えるようまとめて読む。
 fn read_states(conn: &Connection) -> HashMap<String, CachedState> {
     let mut states = HashMap::new();
-    let Ok(mut stmt) = conn.prepare("SELECT path, mtime, size, sha256, uploaded FROM scan_cache")
-    else {
+    let Ok(cached) = read_snapshot(conn) else {
         return states;
     };
-    let Ok(rows) = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, i64>(1)?,
-            row.get::<_, i64>(2)?,
-            row.get::<_, Option<String>>(3)?,
-            row.get::<_, i64>(4)?,
-        ))
-    }) else {
-        return states;
-    };
-    for row in rows.flatten() {
-        let (path, mtime, size, sha256, uploaded) = row;
+    for entry in cached.photos {
         states.insert(
-            path,
+            entry.photo.path,
             CachedState {
                 stamp: FileStamp {
-                    mtime_millis: mtime,
-                    size: size as u64,
+                    mtime_millis: entry.mtime_millis,
+                    size: entry.size,
                 },
-                sha256,
-                uploaded: uploaded != 0,
+                sha256: entry.photo.sha256,
+                uploaded: entry.photo.uploaded,
             },
         );
     }
     states
+}
+
+/// キャッシュを走査側へ渡す。読み出せない場合は呼び出し側で全走査へ戻す。
+pub(crate) fn read_cached_scan(app: &AppHandle) -> Result<CachedScan, String> {
+    open_cache(app).and_then(|conn| read_snapshot(&conn))
 }
 
 /// 走査結果でキャッシュを全置換する。今回の走査に無いパスの行は消える。
@@ -191,9 +225,11 @@ fn replace_all(conn: &mut Connection, result: &ScanResult) -> Result<(), String>
     let previous = read_states(conn);
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     {
-        // 消えた写真の行を残さないよう、丸ごと消してから入れ直す。
+        // 消えた写真と除外ファイルの行を残さないよう、丸ごと消してから入れ直す。
         // パスを列挙して消すやり方はプレースホルダ数の上限に当たりうるので避ける。
         tx.execute("DELETE FROM scan_cache", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM scan_skipped", [])
             .map_err(|e| e.to_string())?;
         let mut stmt = tx
             .prepare(
@@ -221,6 +257,20 @@ fn replace_all(conn: &mut Connection, result: &ScanResult) -> Result<(), String>
             ])
             .map_err(|e| e.to_string())?;
         }
+        drop(stmt);
+        let mut skipped_stmt = tx
+            .prepare("INSERT INTO scan_skipped (path, mtime, size) VALUES (?1, ?2, ?3)")
+            .map_err(|e| e.to_string())?;
+        for skipped in &result.skipped_files {
+            skipped_stmt
+                .execute(rusqlite::params![
+                    skipped.path,
+                    skipped.mtime_millis,
+                    skipped.size as i64
+                ])
+                .map_err(|e| e.to_string())?;
+        }
+        drop(skipped_stmt);
         tx.execute(
             "INSERT INTO scan_meta (id, skipped_count, root_dir) VALUES (1, ?1, ?2)
              ON CONFLICT(id) DO UPDATE SET skipped_count = ?1, root_dir = ?2",
@@ -276,6 +326,7 @@ pub async fn cached_photos(app: AppHandle) -> Result<ScanResult, String> {
         photos: Vec::new(),
         skipped_count: 0,
         root_dir: String::new(),
+        skipped_files: Vec::new(),
     };
     // SQLite の読み出しはブロッキングなのでプールへ逃がす。
     tauri::async_runtime::spawn_blocking(move || {
@@ -311,6 +362,8 @@ pub async fn clear_scan_cache(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let conn = open_cache(&app)?;
         conn.execute("DELETE FROM scan_cache", [])
+            .map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM scan_skipped", [])
             .map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM scan_meta", [])
             .map_err(|e| e.to_string())?;
@@ -368,6 +421,7 @@ mod tests {
             photos: vec![sample_photo("/b.png", 100), sample_photo("/a.png", 200)],
             skipped_count: 3,
             root_dir: "/root".to_string(),
+            skipped_files: Vec::new(),
         };
         replace_all(&mut conn, &result).unwrap();
 
@@ -386,6 +440,7 @@ mod tests {
             photos: vec![sample_photo("/a.png", 200), sample_photo("/b.png", 100)],
             skipped_count: 0,
             root_dir: "/root".to_string(),
+            skipped_files: Vec::new(),
         };
         replace_all(&mut conn, &first).unwrap();
 
@@ -393,6 +448,7 @@ mod tests {
             photos: vec![sample_photo("/a.png", 200)],
             skipped_count: 0,
             root_dir: "/root".to_string(),
+            skipped_files: Vec::new(),
         };
         replace_all(&mut conn, &second).unwrap();
 
@@ -413,6 +469,7 @@ mod tests {
             photos: vec![sample_photo(&key, 100)],
             skipped_count: 0,
             root_dir: "/root".to_string(),
+            skipped_files: Vec::new(),
         };
         replace_all(&mut conn, &result).unwrap();
         update_upload_state(
@@ -430,5 +487,27 @@ mod tests {
         let restored = read_all(&conn).unwrap();
         assert_eq!(restored.photos[0].sha256.as_deref(), Some("abc"));
         assert!(restored.photos[0].uploaded);
+    }
+    #[test]
+    fn skipped_file_manifest_survives_a_cache_round_trip() {
+        let mut conn = in_memory();
+        let result = ScanResult {
+            photos: Vec::new(),
+            skipped_count: 1,
+            root_dir: "/root".to_string(),
+            skipped_files: vec![SkippedFile {
+                path: "/unrelated.png".to_string(),
+                mtime_millis: 123,
+                size: 456,
+            }],
+        };
+        replace_all(&mut conn, &result).unwrap();
+
+        let restored = read_snapshot(&conn).unwrap();
+        assert_eq!(restored.skipped_count, 1);
+        assert_eq!(restored.skipped_files.len(), 1);
+        assert_eq!(restored.skipped_files[0].path, "/unrelated.png");
+        assert_eq!(restored.skipped_files[0].mtime_millis, 123);
+        assert_eq!(restored.skipped_files[0].size, 456);
     }
 }
