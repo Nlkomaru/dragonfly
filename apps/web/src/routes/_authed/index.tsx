@@ -869,6 +869,7 @@ function GalleryPage() {
         }
         onPreview={detailPhoto ? () => openPreview(detailPhoto) : undefined}
         onDelete={detailPhoto ? () => requestDelete(detailPhoto) : undefined}
+        showWorldLinkCopy
       />
 
       {/* 拡大表示。画像を左上に寄せ、右と下に情報を出してその場でタグも編集できる。 */}
@@ -882,6 +883,7 @@ function GalleryPage() {
         onPrev={() => stepPreview(-1)}
         onNext={() => stepPreview(1)}
         onDelete={previewPhoto ? () => requestDelete(previewPhoto) : undefined}
+        showWorldLinkCopy
         onRotate={
           previewPhoto ? (degrees) => void rotatePhoto(previewPhoto, degrees) : undefined
         }

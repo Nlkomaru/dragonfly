@@ -39,8 +39,7 @@ export function apiPhotoToPhoto(api: ApiPhoto): Photo {
     metadata: {
       application: "dragonfly",
       version: 1,
-      // 撮影者は API に載っていないため空。同席者リストは players をそのまま使う。
-      author: { id: "", displayName: "" },
+      author: api.author ?? { id: "", displayName: "" },
       world,
       players: api.players,
     },
