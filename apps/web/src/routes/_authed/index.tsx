@@ -44,6 +44,12 @@ import {
 import { apiPhotoToPhoto } from "../../lib/apiPhotoToPhoto";
 import { extractPhotoBlurhash } from "../../lib/extractPhotoBlurhash";
 import { mapWithConcurrency } from "../../lib/extractPhotoPalette";
+import {
+  ImageFetchError,
+  rotateImageBlob,
+  type RotatedImageBlob,
+} from "../../lib/rotateImage";
+
 import { fetchPhotosPage } from "../../server/fetchPhotosPage";
 
 /**
@@ -605,24 +611,44 @@ function GalleryPage() {
   }, [deleteTarget, search.photo, closeDetail]);
 
   /**
-   * 写真を回転する。R2 上の実体を上書きするサーバー処理で、元には戻せる
-   * （逆方向にもう一度回せばよい）が、再エンコードのぶん画質は少しずつ落ちる。
-   * 成功したら応答の ApiPhoto で手元を差し替える。URL（署名）も新しくなるので、
-   * ブラウザのキャッシュに残った回転前の画像を掴み続けることはない。
+   * 写真を回転する。大きな画像のピクセル処理はブラウザで行い、
+   * 圧縮済みの AVIF だけをサーバーへ送って R2 の実体を上書きする。
+   * 成功したら応答の ApiPhoto で手元を差し替える。
    */
   const rotatePhoto = useCallback(
     async (photo: Photo, degrees: 90 | 270) => {
       const photoId = photo.path;
+      const apiPhoto = apiPhotos.find((item) => item.id === photoId) ?? detailApi;
+      if (!apiPhoto) {
+        setRotateError("写真の情報を取得できませんでした");
+        return;
+      }
+
       setRotatingId(photoId);
       setRotateError(null);
       try {
+        const image = await rotateImageBlob(apiPhoto.url, degrees);
+        let thumb: RotatedImageBlob | null = null;
+        try {
+          thumb = await rotateImageBlob(apiPhoto.thumbUrl, degrees);
+        } catch (error) {
+          // サムネイル無しの古い写真は本体だけ回転し、既存の状態を維持する。
+          if (!(error instanceof ImageFetchError) || error.status !== 404) throw error;
+        }
+
+        const form = new FormData();
+        form.append("image", image.blob, `${photoId}.avif`);
+        if (thumb) form.append("thumb", thumb.blob, `${photoId}_thumb.avif`);
+        form.append("degrees", String(degrees));
+        form.append("width", String(image.width));
+        form.append("height", String(image.height));
+
         const res = await fetch(
           `/api/v1/users/me/photos/${encodeURIComponent(photoId)}/rotate`,
           {
             method: "POST",
             credentials: "include",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ degrees }),
+            body: form,
           },
         );
         if (!res.ok) throw new Error(`写真を回転できませんでした (${res.status})`);
@@ -649,7 +675,7 @@ function GalleryPage() {
         setRotatingId(null);
       }
     },
-    [],
+    [apiPhotos, detailApi],
   );
 
   /** 選択式のフィルタ（ワールド / プレイヤー / タグ）をその場で URL に反映する。 */

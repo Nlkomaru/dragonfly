@@ -3,6 +3,7 @@
 
 import type { PaletteSwatch } from "./palette";
 import type { PlayerRef, VrcxMetadata, WorldRef } from "./photo";
+import type { RotationDegrees } from "./rotate";
 
 /** 1リクエストで問い合わせられるハッシュ数の上限。超える分はクライアントが分割する。 */
 export const CHECK_HASH_LIMIT = 500;
@@ -105,12 +106,16 @@ export interface ApiPhoto {
 }
 
 /**
- * 写真の回転要求。R2 上の実体（本体とサムネイル）を回転して上書きする。
- * 応答は更新後の ApiPhoto（width / height / byteSize / URL が変わる）。
+ * 写真の回転要求に含めるメタデータ。
+ * 本体とサムネイルの AVIF は multipart のファイルパートとして同時に送る。
  */
 export interface RotatePhotoRequest {
   /** 時計回りの度数。 */
-  degrees: import("./rotate").RotationDegrees;
+  degrees: RotationDegrees;
+  /** 回転後の幅。 */
+  width: number;
+  /** 回転後の高さ。 */
+  height: number;
 }
 
 /** 写真 1 枚のタグを置き換える要求。ここに無いタグはその写真から外れる。 */
