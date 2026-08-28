@@ -176,6 +176,7 @@ describe("rotation", () => {
     );
 
     expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "image must be an AVIF file" });
   });
 });
 

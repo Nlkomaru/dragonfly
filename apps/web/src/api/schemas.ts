@@ -123,7 +123,8 @@ export const PutPhotoTagsResponseSchema = z.object({
  */
 export const RotatePhotoRequestSchema = z.object({
   degrees: z
-    .union([z.literal(90), z.literal(180), z.literal(270)])
+    .coerce.number()
+    .pipe(z.union([z.literal(90), z.literal(180), z.literal(270)]))
     .meta({ description: "時計回りの回転角（度）", example: 90 }),
   width: z.coerce.number().int().positive().meta({ description: "回転後の幅", example: 1080 }),
   height: z.coerce.number().int().positive().meta({ description: "回転後の高さ", example: 1920 }),
