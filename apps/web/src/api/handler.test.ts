@@ -160,6 +160,25 @@ describe("documentation", () => {
   });
 });
 
+describe("rotation", () => {
+  it("rejects non-AVIF uploads before touching the photo", async () => {
+    currentSession.value = { user: { id: "user-1", name: "nikomaru" } };
+    const form = new FormData();
+    form.set("image", new File([new Uint8Array([1])], "image.png", { type: "image/png" }));
+    form.set("degrees", "90");
+    form.set("width", "1080");
+    form.set("height", "1920");
+
+    const res = await handler.request(
+      "/api/v1/users/me/photos/photo-1/rotate",
+      { method: "POST", body: form },
+      bindings,
+    );
+
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("tags", () => {
   /** タグの検証はハンドラの手前（zod）で落ちるので、DB に触らずに確かめられる。 */
   const putTags = (body: unknown) =>

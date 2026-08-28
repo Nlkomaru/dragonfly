@@ -42,6 +42,7 @@ import {
   photoKeys,
   setPhotoTags,
 } from "../server/photos";
+
 import { PhotoObjectNotFound, streamPhotoObject } from "../server/r2";
 
 /** 認証エラー / 所有者不一致は全ルート共通なので、ドキュメントもまとめて使い回す。 */
@@ -383,18 +384,36 @@ photosRouter.post(
     tags: ["photos"],
     summary: "写真の回転",
     description:
-      "R2 上の実体（本体とサムネイル）を指定した角度だけ時計回りに回転し、その場で上書きする。" +
+      "ブラウザで回転・再エンコードした AVIF（本体とサムネイル）を受け取り、R2 にその場で上書きする。" +
+      "Worker 内では画像をデコードしないため、4K 写真でも Worker のメモリ上限を超えにくい。" +
       "DB に回転角は持たず、width / height / byteSize を実体に合わせて更新する。" +
-      "AVIF は無損失回転ができないため再エンコードになり、繰り返すと画質は少しずつ落ちる。" +
       "BlurHash は無効になるので消し、ブラウザが後から計算し直す。" +
       "応答は更新後の写真（署名 URL も新しくなる）。",
+    requestBody: {
+      required: true,
+      content: {
+        "multipart/form-data": {
+          schema: {
+            type: "object",
+            required: ["image", "degrees", "width", "height"],
+            properties: {
+              image: { type: "string", format: "binary", description: "回転後の本体 AVIF" },
+              thumb: { type: "string", format: "binary", description: "回転後のサムネイル AVIF" },
+              degrees: { type: "integer", enum: [90, 180, 270], description: "時計回りの回転角" },
+              width: { type: "integer", description: "回転後の幅" },
+              height: { type: "integer", description: "回転後の高さ" },
+            },
+          },
+        },
+      },
+    },
     responses: {
       200: {
         description: "回転を反映した写真",
         content: { "application/json": { schema: resolver(ApiPhotoSchema) } },
       },
       400: {
-        description: "回転角が 90 / 180 / 270 以外",
+        description: "回転データが不正",
         content: { "application/json": { schema: resolver(ErrorResponseSchema) } },
       },
       ...notFoundResponse,
@@ -402,47 +421,66 @@ photosRouter.post(
     },
   }),
   validator("param", UserPhotoParamSchema),
-  validator("json", RotatePhotoRequestSchema),
   async (c) => {
     const ownerId = c.get("ownerId");
     const photoId = c.req.param("photoId");
-    const { degrees } = c.req.valid("json");
+
+    let form: FormData;
+    try {
+      form = await c.req.formData();
+    } catch {
+      throw new HTTPException(400, { message: "multipart form data is required" });
+    }
+
+    const image = form.get("image");
+    const thumb = form.get("thumb");
+    const parsed = RotatePhotoRequestSchema.safeParse({
+      degrees: form.get("degrees"),
+      width: form.get("width"),
+      height: form.get("height"),
+    });
+    if (!parsed.success) {
+      throw new HTTPException(400, { message: `invalid rotation metadata: ${parsed.error.message}` });
+    }
+    if (!(image instanceof File) || image.type !== "image/avif") {
+      throw new HTTPException(400, { message: "image must be an AVIF file" });
+    }
+    if (thumb !== null && (!(thumb instanceof File) || thumb.type !== "image/avif")) {
+      throw new HTTPException(400, { message: "thumb must be an AVIF file" });
+    }
 
     // 所有者条件込みで引くので、他人の写真 ID は 404 になる。
     const keys = await findPhotoKeys(c.get("db"), ownerId, photoId);
     if (!keys) throw new HTTPException(404, { message: "photo not found" });
-
-    const bucket = c.get("photos");
-    const object = await bucket.get(keys.r2Key);
-    if (!object) throw new HTTPException(404, { message: "object not found" });
-
-    // wasm を含むモジュールは Node の vitest から静的に辿れると壊れるので遅延で読む。
-    const { rotateAvif } = await import("../server/avif");
-
-    // 先に本体・サムネイルの両方を回転し切ってから書き込む。
-    // 片方だけ上書きした状態で失敗すると、向きの食い違いが残ってしまうため。
-    const image = await rotateAvif(await object.arrayBuffer(), degrees);
-    let thumb: Awaited<ReturnType<typeof rotateAvif>> | null = null;
-    if (keys.thumbKey) {
-      const thumbObject = await bucket.get(keys.thumbKey);
-      if (thumbObject) thumb = await rotateAvif(await thumbObject.arrayBuffer(), degrees);
+    const expectedDimensions =
+      parsed.data.degrees === 180
+        ? { width: keys.width, height: keys.height }
+        : { width: keys.height, height: keys.width };
+    if (
+      parsed.data.width !== expectedDimensions.width ||
+      parsed.data.height !== expectedDimensions.height
+    ) {
+      throw new HTTPException(400, { message: "rotation dimensions do not match the photo" });
+    }
+    if (keys.thumbKey && !(thumb instanceof File)) {
+      throw new HTTPException(400, { message: "thumb is required for this photo" });
     }
 
-    // キーは変換前 PNG の sha256 なので、回転しても同じキーへの上書きでよい
-    // （identity と重複判定は変換前の画像に対するもので、回転では変わらない）。
-    await bucket.put(keys.r2Key, image.bytes, {
+    const bucket = c.get("photos");
+    // ブラウザで生成済みの圧縮データをストリームのまま R2 に保存する。
+    const imageObject = await bucket.put(keys.r2Key, image.stream(), {
       httpMetadata: { contentType: "image/avif" },
     });
-    if (keys.thumbKey && thumb) {
-      await bucket.put(keys.thumbKey, thumb.bytes, {
+    if (keys.thumbKey && thumb instanceof File) {
+      await bucket.put(keys.thumbKey, thumb.stream(), {
         httpMetadata: { contentType: "image/avif" },
       });
     }
 
     await applyPhotoRotation(c.get("db"), ownerId, photoId, {
-      width: image.width,
-      height: image.height,
-      byteSize: image.bytes.byteLength,
+      width: parsed.data.width,
+      height: parsed.data.height,
+      byteSize: imageObject.size,
     });
 
     // 更新後の行から組み立て直す。署名 URL も新しい exp で発行される。

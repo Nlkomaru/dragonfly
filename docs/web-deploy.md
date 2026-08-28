@@ -1,7 +1,7 @@
 # Web アプリのデプロイ
 
 `apps/web` は TanStack Start を Cloudflare Workers 向けにビルドし、`dragonfly.vrc.nikomaru.dev` で公開する。
-画像の実体は R2、検索用のメタデータは D1 に置く。
+画像の実体は R2、画像の回転・再エンコードはブラウザ、検索用のメタデータは D1 に置く。
 
 ## リソース
 
@@ -12,6 +12,19 @@
 | D1 | `dragonfly` | 写真・ワールド・同席者・タグ・API キー |
 
 R2 バケットと D1 はどちらも作成済みで、`wrangler.jsonc` に ID を記載してある。
+
+## Worker の CPU / メモリ上限
+
+写真の回転はブラウザで AVIF をデコード・再エンコードし、圧縮済みの AVIF だけを Worker に送る。
+Worker 内で画像を WASM デコードしないため、4K 写真の RGBA 展開による 128 MiB メモリ超過を避けられる。
+Worker は受け取ったファイルをストリームのまま R2 に保存し、実寸と byteSize だけを D1 に反映する。
+
+以前の `limits.cpu_ms` 設定は Worker 内の AVIF 処理を廃止したため不要になった。
+Cloudflare Images binding は AVIF 入力が Enterprise 限定なので、この構成では使用しない。
+
+Cloudflare の `Worker exceeded resource limits` が再発する場合は、ダッシュボードの
+**Metrics > Errors > Invocation Statuses** で原因を確認すること。通常の API まで
+`Exceeded Memory` になる場合は、リクエスト本文のサイズ上限も確認する。
 
 作り直すときは以下。API トークンには **D1:Edit** の権限が必要で、
 権限が足りないと `Authentication error [code: 10000]` で失敗する。

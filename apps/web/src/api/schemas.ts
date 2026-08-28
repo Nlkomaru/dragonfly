@@ -118,13 +118,15 @@ export const PutPhotoTagsResponseSchema = z.object({
 });
 
 /**
- * POST /photos/:photoId/rotate のボディ。
- * 度数は時計回り。90 の倍数以外は回転後の実寸が定義できないので受け付けない。
+ * POST /photos/:photoId/rotate の multipart メタデータ。
+ * 画像のピクセル処理はブラウザで行い、Worker は AVIF のストリームを保存する。
  */
 export const RotatePhotoRequestSchema = z.object({
   degrees: z
     .union([z.literal(90), z.literal(180), z.literal(270)])
     .meta({ description: "時計回りの回転角（度）", example: 90 }),
+  width: z.coerce.number().int().positive().meta({ description: "回転後の幅", example: 1080 }),
+  height: z.coerce.number().int().positive().meta({ description: "回転後の高さ", example: 1920 }),
 });
 
 // ---------------------------------------------------------------------------

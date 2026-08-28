@@ -595,14 +595,19 @@ export async function listFacets(
   };
 }
 
-/** R2 のキーだけを引く。所有者条件込みなので、画像配信の権限チェックを兼ねる。 */
+/** R2 のキーと現在の解像度を引く。所有者条件込みなので、権限チェックを兼ねる。 */
 export async function findPhotoKeys(
   db: DrizzleDb,
   ownerId: string,
   photoId: string,
-): Promise<{ r2Key: string; thumbKey: string | null } | null> {
+): Promise<{ r2Key: string; thumbKey: string | null; width: number; height: number } | null> {
   const rows = await db
-    .select({ r2Key: photos.r2Key, thumbKey: photos.thumbKey })
+    .select({
+      r2Key: photos.r2Key,
+      thumbKey: photos.thumbKey,
+      width: photos.width,
+      height: photos.height,
+    })
     .from(photos)
     .where(and(eq(photos.id, photoId), eq(photos.ownerId, ownerId)))
     .limit(1);
