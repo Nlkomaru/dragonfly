@@ -47,6 +47,7 @@ const photoColumns = {
   worldId: photos.worldId,
   worldName: photos.worldName,
   instanceId: photos.instanceId,
+  authorId: photos.authorId,
   blurhash: photos.blurhash,
 };
 
@@ -61,6 +62,7 @@ interface PhotoRow {
   worldId: string | null;
   worldName: string | null;
   instanceId: string | null;
+  authorId: string | null;
   blurhash: string | null;
 }
 
@@ -78,6 +80,7 @@ async function toApiPhoto(
   ownerId: string,
   row: PhotoRow,
   players: ApiPhoto["players"],
+  author: ApiPhoto["author"],
   tagNames: string[],
   signingSecret: string,
 ): Promise<ApiPhoto> {
@@ -99,6 +102,7 @@ async function toApiPhoto(
     world: row.worldId
       ? { id: row.worldId, name: row.worldName ?? "", instanceId: row.instanceId ?? "" }
       : null,
+    author,
     players,
     tags: tagNames,
     // 未計算なら null。クライアントはそれを見て「後から埋める対象」だと判断する。
@@ -400,6 +404,7 @@ export async function listPhotos(
           ownerId,
           row,
           relations.players.get(row.id) ?? [],
+          relations.authors.get(row.id) ?? null,
           relations.tags.get(row.id) ?? [],
           signingSecret,
         ),
@@ -414,12 +419,16 @@ async function loadRelations(
   db: DrizzleDb,
   ownerId: string,
   photoIds: string[],
-): Promise<{ players: Map<string, ApiPhoto["players"]>; tags: Map<string, string[]> }> {
+): Promise<{
+  players: Map<string, ApiPhoto["players"]>;
+  authors: Map<string, NonNullable<ApiPhoto["author"]>>;
+  tags: Map<string, string[]>;
+}> {
   const players = new Map<string, ApiPhoto["players"]>();
+  const authors = new Map<string, NonNullable<ApiPhoto["author"]>>();
   const tagNames = new Map<string, string[]>();
-  if (photoIds.length === 0) return { players, tags: tagNames };
-
-  const [playerRows, tagRows] = await db.batch([
+  if (photoIds.length === 0) return { players, authors, tags: tagNames };
+  const [playerRows, authorRows, tagRows] = await db.batch([
     db
       .select({
         photoId: photoPlayers.photoId,
@@ -429,6 +438,15 @@ async function loadRelations(
       .from(photoPlayers)
       .innerJoin(vrcUsers, eq(vrcUsers.id, photoPlayers.userId))
       .where(inArray(photoPlayers.photoId, photoIds)),
+    db
+      .select({
+        photoId: photos.id,
+        id: vrcUsers.id,
+        displayName: vrcUsers.displayName,
+      })
+      .from(photos)
+      .innerJoin(vrcUsers, eq(vrcUsers.id, photos.authorId))
+      .where(inArray(photos.id, photoIds)),
     db
       .select({ photoId: photoTags.photoId, name: tags.name })
       .from(photoTags)
@@ -441,12 +459,15 @@ async function loadRelations(
     list.push({ id: row.id, displayName: row.displayName });
     players.set(row.photoId, list);
   }
+  for (const row of authorRows) {
+    authors.set(row.photoId, { id: row.id, displayName: row.displayName });
+  }
   for (const row of tagRows) {
     const list = tagNames.get(row.photoId) ?? [];
     list.push(row.name);
     tagNames.set(row.photoId, list);
   }
-  return { players, tags: tagNames };
+  return { players, authors, tags: tagNames };
 }
 
 export async function getPhoto(
@@ -467,6 +488,7 @@ export async function getPhoto(
     ownerId,
     row,
     relations.players.get(row.id) ?? [],
+    relations.authors.get(row.id) ?? null,
     relations.tags.get(row.id) ?? [],
     signingSecret,
   );

@@ -96,6 +96,8 @@ export interface ApiPhoto {
   height: number;
   byteSize: number;
   world: WorldRef | null;
+  /** ワールドを作成した VRChat ユーザー。古い写真などで不明な場合は null。 */
+  author: PlayerRef | null;
   players: PlayerRef[];
   tags: string[];
   /**

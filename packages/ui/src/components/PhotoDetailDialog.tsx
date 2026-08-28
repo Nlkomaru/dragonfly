@@ -9,6 +9,7 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 import { Separator } from "./ui/separator";
+import { WorldLinkCopyButton } from "./WorldLinkCopyButton";
 
 export interface PhotoDetailDialogProps {
   /** 表示対象。null なら閉じている扱い。 */
@@ -33,6 +34,8 @@ export interface PhotoDetailDialogProps {
    * 確認ダイアログは呼び出し側の責務で、ここでは押されたことを伝えるだけ。
    */
   onDelete?: () => void;
+  /** Web でワールド共有リンクのコピーを表示する。 */
+  showWorldLinkCopy?: boolean;
   className?: string;
 }
 
@@ -51,6 +54,7 @@ export function PhotoDetailDialog({
   tagsPending = false,
   onPreview,
   onDelete,
+  showWorldLinkCopy = false,
   className,
 }: PhotoDetailDialogProps) {
   // ワールド名が空文字の写真でもタイトルが空にならないようにする。
@@ -108,7 +112,16 @@ export function PhotoDetailDialog({
               </DetailRow>
 
               <DetailRow icon={<Globe />} label="ワールド">
-                <p>{worldName}</p>
+                <div className="flex min-w-0 items-center gap-2">
+                  <p className="min-w-0 flex-1 truncate">{worldName}</p>
+                  {showWorldLinkCopy ? (
+                    <WorldLinkCopyButton
+                      worldId={worldId}
+                      worldName={worldName}
+                      authorName={photo.metadata.author.displayName}
+                    />
+                  ) : null}
+                </div>
                 {/* インスタンス ID は長いので折り返さず横スクロールさせる。 */}
                 <p className="overflow-x-auto text-xs whitespace-nowrap text-muted-foreground">
                   {worldRefLabel}

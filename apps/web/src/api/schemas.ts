@@ -312,6 +312,7 @@ export const ApiPhotoSchema = z.object({
   height: z.number(),
   byteSize: z.number(),
   world: WorldRefSchema.nullable(),
+  author: PlayerRefSchema.nullable(),
   players: z.array(PlayerRefSchema),
   tags: z.array(z.string()),
   blurhash: z

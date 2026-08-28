@@ -20,6 +20,7 @@ import { Badge } from "./ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 import { Separator } from "./ui/separator";
 import { DetailRow } from "./DetailRow";
+import { WorldLinkCopyButton } from "./WorldLinkCopyButton";
 import { TagEditor } from "./TagEditor";
 
 export interface PhotoLightboxProps {
@@ -57,6 +58,8 @@ export interface PhotoLightboxProps {
   tagSuggestions?: string[];
   /** タグを保存中かどうか。 */
   tagsPending?: boolean;
+  /** Web でワールド共有リンクのコピーを表示する。 */
+  showWorldLinkCopy?: boolean;
   className?: string;
 }
 
@@ -81,6 +84,7 @@ export function PhotoLightbox({
   onTagsChange,
   tagSuggestions = [],
   tagsPending = false,
+  showWorldLinkCopy = false,
   className,
 }: PhotoLightboxProps) {
   // 写真を切り替えたら読み込み表示に戻す。前の写真が残って見えるのを防ぐ。
@@ -257,7 +261,16 @@ export function PhotoLightbox({
               </DetailRow>
 
               <DetailRow icon={<Globe />} label="ワールド">
-                <p>{worldName}</p>
+                <div className="flex min-w-0 items-center gap-2">
+                  <p className="min-w-0 flex-1 truncate">{worldName}</p>
+                  {showWorldLinkCopy ? (
+                    <WorldLinkCopyButton
+                      worldId={worldId}
+                      worldName={worldName}
+                      authorName={photo.metadata.author.displayName}
+                    />
+                  ) : null}
+                </div>
                 {/* インスタンス ID は長いので折り返さず横スクロールさせる。 */}
                 <p className="overflow-x-auto text-xs whitespace-nowrap text-muted-foreground">
                   {worldRefLabel}

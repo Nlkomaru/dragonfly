@@ -55,3 +55,4 @@ export { PhotoLightbox, type PhotoLightboxProps } from "./components/PhotoLightb
 export { TagEditor, type TagEditorProps } from "./components/TagEditor";
 export { SelectionActionBar, type SelectionActionBarProps } from "./components/SelectionActionBar";
 export { UploadProgressBar, type UploadProgressBarProps } from "./components/UploadProgressBar";
+export { WorldLinkCopyButton, type WorldLinkCopyButtonProps } from "./components/WorldLinkCopyButton";
