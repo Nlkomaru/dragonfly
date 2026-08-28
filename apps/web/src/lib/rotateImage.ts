@@ -3,6 +3,8 @@
 // Worker では画像をデコードしない。4K 写真の RGBA バッファを Worker の
 // メモリへ展開すると 128 MiB 制限に達するため、ピクセル処理はブラウザで行う。
 
+import { rotateRgba, type RotationDegrees } from "@dragonfly/core";
+
 /** 回転後の画像と、エンコード後の実寸。 */
 export interface RotatedImageBlob {
   blob: Blob;
@@ -12,61 +14,42 @@ export interface RotatedImageBlob {
 
 /** 回転元画像の取得失敗。404 はサムネイル無しとして扱える。 */
 export class ImageFetchError extends Error {
-  constructor(
-    readonly status: number,
-  ) {
+  constructor(readonly status: number) {
     super(`画像を取得できませんでした (${status})`);
   }
-}
-
-function canvasToAvif(canvas: HTMLCanvasElement): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) {
-          reject(new Error("AVIF のエンコードに失敗しました"));
-          return;
-        }
-        if (blob.type !== "image/avif") {
-          reject(new Error("このブラウザは AVIF のエンコードに対応していません"));
-          return;
-        }
-        resolve(blob);
-      },
-      "image/avif",
-      0.7,
-    );
-  });
 }
 
 /** 指定 URL の画像をブラウザで時計回りに回転し、AVIF Blob に変換する。 */
 export async function rotateImageBlob(
   sourceUrl: string,
-  degrees: 90 | 180 | 270,
+  degrees: RotationDegrees,
 ): Promise<RotatedImageBlob> {
   const response = await fetch(sourceUrl, { credentials: "include" });
   if (!response.ok) throw new ImageFetchError(response.status);
 
-  const bitmap = await createImageBitmap(await response.blob());
-  const width = degrees === 180 ? bitmap.width : bitmap.height;
-  const height = degrees === 180 ? bitmap.height : bitmap.width;
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
+  // codec の WASM はブラウザ側だけで遅延ロードする。SSR / Worker には含めない。
+  const [{ default: decode }, { default: encode }] = await Promise.all([
+    import("@jsquash/avif/decode"),
+    import("@jsquash/avif/encode"),
+  ]);
+  const decoded = await decode(await response.arrayBuffer());
+  if (!decoded) throw new Error("AVIF のデコードに失敗しました");
+  const rotated = rotateRgba(
+    {
+      data: decoded.data as Uint8ClampedArray,
+      width: decoded.width,
+      height: decoded.height,
+    },
+    degrees,
+  );
+  const bytes = await encode(
+    { data: rotated.data, width: rotated.width, height: rotated.height } as ImageData,
+    { quality: 70, speed: 8 },
+  );
 
-  const context = canvas.getContext("2d");
-  if (!context) {
-    bitmap.close();
-    throw new Error("画像を回転するキャンバスを作成できませんでした");
-  }
-
-  try {
-    context.translate(width / 2, height / 2);
-    context.rotate((degrees * Math.PI) / 180);
-    context.drawImage(bitmap, -bitmap.width / 2, -bitmap.height / 2);
-  } finally {
-    bitmap.close();
-  }
-
-  return { blob: await canvasToAvif(canvas), width, height };
+  return {
+    blob: new Blob([bytes], { type: "image/avif" }),
+    width: rotated.width,
+    height: rotated.height,
+  };
 }
