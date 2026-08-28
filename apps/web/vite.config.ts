@@ -23,6 +23,11 @@ export default defineConfig({
       external: ["cloudflare:workers"],
     },
   },
+  // @jsquash/avif のマルチスレッドエンコーダーが Worker 内で code splitting を使う。
+  // IIFE では分割された Worker を生成できないため ES module 形式にする。
+  worker: {
+    format: "es",
+  },
   plugins: [
     tanstackStart(),
     react(),
