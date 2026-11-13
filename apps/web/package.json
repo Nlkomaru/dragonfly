@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vp dev --port 1421",
-    "build": "vp build",
+    "dev": "cf dev --port 1421",
+    "build": "cf build",
     "start": "node .output/server/index.mjs",
-    "deploy": "node scripts/prepare-cf.mjs && cf deploy --prebuilt",
+    "deploy": "cf deploy",
     "test": "vp test",
     "db:generate": "drizzle-kit generate"
   },
@@ -31,6 +31,7 @@
     "zod": "^4.4.0"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "2.0.0-beta.v.12",
     "@tailwindcss/vite": "^4.0.0",
     "@tanstack/router-plugin": "^1.95.0",
     "@types/react": "^19.0.0",

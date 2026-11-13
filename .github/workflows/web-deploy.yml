@@ -40,9 +40,6 @@ jobs:
       - name: Build
         run: pnpm build:web
 
-      - name: Prepare Cloudflare output
-        run: node apps/web/scripts/prepare-cf.mjs
-
       - name: Load Production Secrets
         uses: nlkomaru/secret-manager@v2
         with:
