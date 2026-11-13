@@ -27,32 +27,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - name: Setup vp
+        uses: voidzero-dev/setup-vp@v1.22.0
         with:
-          version: 10.26.1
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+          node-version: "26"
+          cache: true
 
       - name: Build Storybook
-        # 成果物は packages/ui/storybook-static に出力される (wrangler.jsonc で同じディレクトリを指している)。
+        # 成果物は packages/ui/storybook-static に出力される。
         run: pnpm build-storybook
 
+      - name: Prepare Cloudflare output
+        run: node packages/ui/scripts/prepare-storybook-cf.mjs
+
       - name: Load Production Secrets
-        uses: nlkomaru/secret-manager@main
+        uses: nlkomaru/secret-manager@v2
         with:
           project: "dragonfly"
           env: "production"
+          shared-keys: CLOUDFLARE_ACCOUNT_ID
 
       - name: Deploy to Cloudflare
-        # wrangler.jsonc の routes で dragonfly-sb.vrc.nikomaru.dev を custom_domain として指定済み。
+        # dragonfly-sb.vrc.nikomaru.dev をカスタムドメインとして指定済み。
         # 初回実行時に DNS レコードとカスタムドメインが作成されるため、
         # 利用アカウントが vrc.nikomaru.dev ゾーンをホストしている必要がある。
-        run: pnpm --dir packages/ui exec wrangler deploy
+        run: pnpm --dir packages/ui exec cf deploy --prebuilt
