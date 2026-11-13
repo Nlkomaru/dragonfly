@@ -13,21 +13,15 @@ permissions:
   pull-requests: write
   # Rust テストの JUnit 結果を GitHub Check として公開するために必要。
   checks: write
+  id-token: write
 
 concurrency:
   group: preview-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
-  # R2 は S3 互換 API なので aws-cli をそのまま使う。エンドポイントとバケットは secret から取る。
-  # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY は BSM(nikomaru プロジェクト)管理に移行済みで、
-  # ワークフロー起動時にまだ値を取得していないためここでは設定できず、
-  # 実際に使う assets ジョブ内で bitwarden/sm-action 実行後に env として渡す。
-  AWS_REGION: ${{ secrets.AWS_REGION }}
   # GitHub Actions のランナーで EC2 のメタデータ取得を試みて待たされるのを防ぐ。
   AWS_EC2_METADATA_DISABLED: true
-  S3_URL: ${{ secrets.S3_URL }}
-  BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
   # アップロード先バケット(nikomaru-ci)が公開されているドメイン。
   PREVIEW_BASE_URL: https://ci.nikomaru.dev/dragonfly
 
@@ -103,45 +97,49 @@ jobs:
           sha="${{ github.event.pull_request.head.sha || github.sha }}"
           echo "commit_sha=${sha:0:7}" >> "$GITHUB_OUTPUT"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - name: Setup vp
+        uses: voidzero-dev/setup-vp@v1.22.0
         with:
-          version: 10.26.1
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+          node-version: "26"
+          cache: true
 
       - name: Build Storybook
         env:
           STORYBOOK_BASE_PATH: /dragonfly/${{ steps.vars.outputs.commit_sha }}/storybook/
         run: pnpm build-storybook
 
-      # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY は BSM(nikomaru プロジェクト)管理に移行済み。
-      # 以降のステップの env に入るため、Upload to R2 の env: では改めて渡す必要はない。
-      - name: Get secrets from Bitwarden Secrets Manager
-        uses: bitwarden/sm-action@v2
+      - name: Load Preview Secrets
+        uses: nlkomaru/secret-manager@v2
         with:
-          access_token: ${{ secrets.NIKOMARU_BITWARDEN_SECRET_MANAGER_ACCESS_TOKEN }}
-          secrets: |
-            7fca16ab-3904-4706-9849-b49900de563a > AWS_ACCESS_KEY_ID
-            769a462b-bf2d-466c-ae1f-b49900de56c8 > AWS_SECRET_ACCESS_KEY
+          project: "dragonfly"
+          env: "preview"
+          shared-keys: |
+            NIKO_CI_AWS_ACCESS_KEY_ID
+            NIKO_CI_AWS_SECRET_ACCESS_KEY
+            NIKO_CI_AWS_REGION
+            NIKO_CI_BUCKET_NAME
+            NIKO_CI_S3_URL
 
       - name: Upload to R2
         env:
+          AWS_ACCESS_KEY_ID: ${{ env.NIKO_CI_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.NIKO_CI_AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ""
+          AWS_REGION: ${{ env.NIKO_CI_AWS_REGION }}
+          S3_URL: ${{ env.NIKO_CI_S3_URL }}
+          BUCKET_NAME: ${{ env.NIKO_CI_BUCKET_NAME }}
           COMMIT_SHORT_SHA: ${{ steps.vars.outputs.commit_sha }}
+          RCLONE_CONFIG_R2_TYPE: s3
+          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ env.NIKO_CI_AWS_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ env.NIKO_CI_AWS_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ env.NIKO_CI_S3_URL }}
+          RCLONE_CONFIG_R2_NO_CHECK_BUCKET: "true"
         run: |
-          aws configure set default.s3.max_concurrent_requests 50
+          command -v rclone >/dev/null || { sudo apt-get update && sudo apt-get install -y rclone; }
 
-          S3_BASE="s3://${BUCKET_NAME}/dragonfly/${COMMIT_SHORT_SHA}"
-          S3_OPTS="--endpoint-url ${S3_URL} --only-show-errors --recursive"
-
-          aws s3 cp ./packages/ui/storybook-static "$S3_BASE/storybook" $S3_OPTS
+          rclone copy ./packages/ui/storybook-static "r2:${BUCKET_NAME}/dragonfly/${COMMIT_SHORT_SHA}/storybook" \
+            --transfers=32 --checkers=32 --stats=5s --stats-one-line -v
 
           # 公開ドメインはディレクトリURLから index.html を自動で解決しない。
           # Storybook はトップページだけ「末尾スラッシュのキー」としても置く

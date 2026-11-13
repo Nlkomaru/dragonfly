@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: web-deploy
@@ -30,62 +31,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - name: Setup vp
+        uses: voidzero-dev/setup-vp@v1.22.0
         with:
-          version: 10.26.1
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+          node-version: "26"
+          cache: true
 
       - name: Build
         run: pnpm build:web
 
-      # CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID / DISCORD_CLIENT_SECRET / BETTER_AUTH_SECRET は
-      # BSM(nikomaru プロジェクト)管理に移行済み。以降のステップの env として
-      # プロセス環境変数に入るため、run: ステップ側で改めて渡す必要はない。
-      # DISCORD_CLIENT_ID / BETTER_AUTH_URL / ALLOWED_DISCORD_USER_IDS は
-      # BSM未登録のため、引き続き repo secret から渡す。
-      - name: Get secrets from Bitwarden Secrets Manager
-        uses: bitwarden/sm-action@v2
+      - name: Prepare Cloudflare output
+        run: node apps/web/scripts/prepare-cf.mjs
+
+      - name: Load Production Secrets
+        uses: nlkomaru/secret-manager@v2
         with:
-          access_token: ${{ secrets.NIKOMARU_BITWARDEN_SECRET_MANAGER_ACCESS_TOKEN }}
-          secrets: |
-            f1bf4fa4-0288-4a31-b28b-b499013acdce > CLOUDFLARE_API_TOKEN
-            2bad9e23-82af-4fba-b514-b49900e1632f > CLOUDFLARE_ACCOUNT_ID
-            7f2fad0f-ff62-4f80-adff-b49900de5927 > DISCORD_CLIENT_SECRET
-            3fb4f05c-6584-42a8-bb9d-b49900de5764 > BETTER_AUTH_SECRET
+          project: "dragonfly"
+          env: "production"
+          shared-keys: CLOUDFLARE_ACCOUNT_ID
+          export-json: ${{ runner.temp }}/secrets.json
+          export-json-keys: |
+            DISCORD_CLIENT_ID
+            DISCORD_CLIENT_SECRET
+            BETTER_AUTH_SECRET
+            BETTER_AUTH_URL
+            ALLOWED_DISCORD_USER_IDS
 
       - name: Deploy to Cloudflare
-        # wrangler.jsonc の routes で dragonfly.vrc.nikomaru.dev を custom_domain として指定済み。
+        # dragonfly.vrc.nikomaru.dev をカスタムドメインとして指定済み。
         # 初回実行時に DNS レコードとカスタムドメインが作成される。
-        run: pnpm --dir apps/web exec wrangler deploy
-
-      - name: Push secrets
-        # Worker が存在しないと secret を登録できないため、必ず deploy の後に流す。
-        # 値の内容がログに出ないよう、jq で環境変数から JSON を組み立てて標準入力に渡す。
-        # secret を更新すると新しいバージョンが自動で有効になるので、再デプロイは不要。
-        run: |
-          jq -n \
-            --arg discord_client_id "$DISCORD_CLIENT_ID" \
-            --arg discord_client_secret "$DISCORD_CLIENT_SECRET" \
-            --arg better_auth_secret "$BETTER_AUTH_SECRET" \
-            --arg better_auth_url "$BETTER_AUTH_URL" \
-            --arg allowed_discord_user_ids "$ALLOWED_DISCORD_USER_IDS" \
-            '{
-              DISCORD_CLIENT_ID: $discord_client_id,
-              DISCORD_CLIENT_SECRET: $discord_client_secret,
-              BETTER_AUTH_SECRET: $better_auth_secret,
-              BETTER_AUTH_URL: $better_auth_url,
-              ALLOWED_DISCORD_USER_IDS: $allowed_discord_user_ids
-            }' | pnpm --dir apps/web exec wrangler secret bulk
-        env:
-          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
-          BETTER_AUTH_URL: ${{ secrets.BETTER_AUTH_URL }}
-          ALLOWED_DISCORD_USER_IDS: ${{ secrets.ALLOWED_DISCORD_USER_IDS }}
+        # secret は --secrets-file で Worker バージョンと同時に登録する。
+        run: pnpm --dir apps/web exec cf deploy --prebuilt --secrets-file "${{ runner.temp }}/secrets.json"

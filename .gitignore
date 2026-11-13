@@ -2,6 +2,7 @@ node_modules/
 dist/
 .output/
 .wrangler/
+.cloudflare/
 
 storybook-static/
 apps/desktop/src-tauri/target/

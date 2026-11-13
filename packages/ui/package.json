@@ -9,7 +9,8 @@
   },
   "scripts": {
     "storybook": "storybook dev -p 6006",
-    "build-storybook": "storybook build"
+    "build-storybook": "storybook build",
+    "deploy:sb": "storybook build && node scripts/prepare-storybook-cf.mjs && cf deploy --prebuilt"
   },
   "dependencies": {
     "@dragonfly/core": "workspace:*",
@@ -44,7 +45,8 @@
     "storybook": "^10.0.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.9.3",
-    "vite": "^6.0.0",
-    "wrangler": "^4.0.0"
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.5.1",
+    "vite-plus": "1.5.1",
+    "cf": "1.0.0-beta.28"
   }
 }
