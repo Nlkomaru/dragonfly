@@ -1,3 +1,4 @@
+import { cloudflare } from "@cloudflare/vite-plugin";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -29,6 +30,7 @@ export default defineConfig({
     format: "es",
   },
   plugins: [
+    cloudflare({ viteEnvironment: { name: "ssr" } }),
     tanstackStart(),
     react(),
     tailwindcss(),
