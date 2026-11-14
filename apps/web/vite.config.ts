@@ -30,7 +30,7 @@ export default defineConfig({
     format: "es",
   },
   plugins: [
-    cloudflare({ viteEnvironment: { name: "ssr" } }),
+    !process.env.VITEST && cloudflare({ viteEnvironment: { name: "ssr" } }),
     tanstackStart(),
     react(),
     tailwindcss(),
