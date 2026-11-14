@@ -3,6 +3,7 @@ import { bindings, defineConfig } from "cf/config";
 export default defineConfig({
   worker: {
     name: "dragonfly-web",
+    entrypoint: "@tanstack/react-start/server-entry",
     compatibilityDate: "2025-07-01",
     compatibilityFlags: ["nodejs_compat"],
     domains: ["dragonfly.vrc.nikomaru.dev"],
