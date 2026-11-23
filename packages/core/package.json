@@ -10,8 +10,8 @@
   },
   "devDependencies": {
     "typescript": "^5.7.0",
-    "vite-plus": "1.5.1",
-    "vitest": "5.1.0"
+    "vite-plus": "1.6.0",
+    "vitest": "5.1.1"
   },
   "dependencies": {
     "blurhash": "^2.0.5"
